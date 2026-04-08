@@ -113,7 +113,9 @@ export class DocumentsProcessingService implements OnModuleDestroy {
       let extractionError = '';
       let processingError = '';
 
-      if (mode === 'full' && document.sourceType === 'file' && document.storagePath) {
+      const fileLocation = document.fileUrl || document.storagePath;
+
+      if (mode === 'full' && document.sourceType === 'file' && fileLocation) {
         extractionStatus = 'processing';
         await this.documentModel
           .findByIdAndUpdate(documentId, {
@@ -122,7 +124,7 @@ export class DocumentsProcessingService implements OnModuleDestroy {
           .exec();
 
         const extractionResult = await this.extractorService.extractFromFile(
-          document.storagePath,
+          fileLocation,
           document.mimeType,
         );
 

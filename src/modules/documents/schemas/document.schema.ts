@@ -51,8 +51,17 @@ export class AdminDocument extends MongooseDocument {
   @Prop({ default: '' })
   storagePath?: string;
 
+  @Prop({ default: '' })
+  fileUrl?: string;
+
   @Prop({ default: 'local' })
   storageProvider?: string;
+
+  @Prop({ default: '' })
+  storageKey?: string;
+
+  @Prop({ default: 'raw' })
+  storageResourceType?: string;
 
   @Prop({
     type: String,

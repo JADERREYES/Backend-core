@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { readFile } from 'fs/promises';
 import { extname } from 'path';
 import * as mammoth from 'mammoth';
+import { StorageService } from '../../common/storage/storage.service';
 
 type ExtractionResult = {
   text: string;
@@ -13,8 +13,10 @@ type ExtractionResult = {
 export class DocumentsTextExtractorService {
   private readonly logger = new Logger(DocumentsTextExtractorService.name);
 
+  constructor(private readonly storageService: StorageService) {}
+
   async extractFromFile(filePath: string, mimeType?: string): Promise<ExtractionResult> {
-    const fileBuffer = await readFile(filePath);
+    const fileBuffer = await this.storageService.read(filePath);
     const extension = extname(filePath).toLowerCase();
 
     if (mimeType === 'application/pdf' || extension === '.pdf') {

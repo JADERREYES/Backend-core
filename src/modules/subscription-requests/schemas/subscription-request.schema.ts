@@ -102,6 +102,15 @@ export class SubscriptionRequest extends Document {
   proofUrl: string;
 
   @Prop({ default: '' })
+  proofStorageProvider: string;
+
+  @Prop({ default: '' })
+  proofStorageKey: string;
+
+  @Prop({ default: '' })
+  proofFileUrl: string;
+
+  @Prop({ default: '' })
   receiptUrl: string;
 
   @Prop({ default: '' })
@@ -112,6 +121,9 @@ export class SubscriptionRequest extends Document {
 
   @Prop({ default: '' })
   proofMimeType: string;
+
+  @Prop({ default: 0 })
+  proofSize: number;
 
   @Prop({
     type: String,

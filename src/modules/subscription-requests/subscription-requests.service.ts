@@ -14,6 +14,7 @@ import { PlansService } from '../plans/plans.service';
 import { PaymentMethodsService } from '../payment-methods/payment-methods.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { ActivateSubscriptionRequestDto } from './dto/activate-subscription-request.dto';
+import { StorageService } from '../../common/storage/storage.service';
 
 @Injectable()
 export class SubscriptionRequestsService {
@@ -25,6 +26,7 @@ export class SubscriptionRequestsService {
     private readonly plansService: PlansService,
     private readonly paymentMethodsService: PaymentMethodsService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly storageService: StorageService,
   ) {}
 
   async create(userId: string, dto: CreateSubscriptionRequestDto, file?: any) {
@@ -54,6 +56,16 @@ export class SubscriptionRequestsService {
     if (plan.category === 'free') {
       throw new BadRequestException('No se puede solicitar el plan free por pago manual');
     }
+
+    const uploadedProof = file
+      ? await this.storageService.upload({
+          buffer: file.buffer,
+          originalName: file.originalname,
+          mimeType: file.mimetype,
+          folder: 'subscription-proofs',
+          resourceType: file.mimetype?.startsWith('image/') ? 'image' : 'raw',
+        })
+      : null;
 
     return this.subscriptionRequestModel.create({
       userId: userObjectId,
@@ -88,11 +100,15 @@ export class SubscriptionRequestsService {
         instructions: paymentMethod.instructions,
       },
       message: dto.message?.trim() || '',
-      proofUrl: file ? `/uploads/subscription-proofs/${file.filename}` : '',
-      receiptUrl: file ? `/uploads/subscription-proofs/${file.filename}` : '',
+      proofUrl: uploadedProof?.fileUrl || '',
+      proofStorageProvider: uploadedProof?.provider || '',
+      proofStorageKey: uploadedProof?.key || '',
+      proofFileUrl: uploadedProof?.fileUrl || '',
+      receiptUrl: uploadedProof?.fileUrl || '',
       proofOriginalName: file?.originalname || '',
-      receiptFileName: file?.originalname || '',
-      proofMimeType: file?.mimetype || '',
+      receiptFileName: uploadedProof?.fileName || file?.originalname || '',
+      proofMimeType: uploadedProof?.mimeType || file?.mimetype || '',
+      proofSize: uploadedProof?.size || file?.size || 0,
       status: file ? 'receipt_uploaded' : 'new',
       adminNotes: '',
     });

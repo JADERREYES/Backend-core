@@ -28,11 +28,15 @@ async function bootstrap() {
     }),
   );
 
-  app.useStaticAssets(join(process.cwd(), 'uploads'), {
-    prefix: '/uploads/',
-  });
-
   const configService = app.get(ConfigService);
+  const storageProvider = configService.get<string>('STORAGE_PROVIDER') || 'local';
+
+  if (storageProvider === 'local') {
+    app.useStaticAssets(join(process.cwd(), 'uploads'), {
+      prefix: '/uploads/',
+    });
+  }
+
   const port = configService.get<number>('PORT') || 3000;
 
   await app.listen(port);
@@ -40,4 +44,3 @@ async function bootstrap() {
 }
 
 void bootstrap();
-

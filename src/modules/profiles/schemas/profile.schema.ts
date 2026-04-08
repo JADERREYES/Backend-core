@@ -54,6 +54,21 @@ export class Profile extends Document {
   avatarUrl?: string;
 
   @Prop({ default: '' })
+  avatarStorageProvider?: string;
+
+  @Prop({ default: '' })
+  avatarStorageKey?: string;
+
+  @Prop({ default: '' })
+  avatarFileName?: string;
+
+  @Prop({ default: '' })
+  avatarMimeType?: string;
+
+  @Prop({ default: 0 })
+  avatarSize?: number;
+
+  @Prop({ default: '' })
   bio?: string;
 
   @Prop({

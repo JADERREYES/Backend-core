@@ -16,14 +16,16 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateCheckInDto } from './dto/create-checkin.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname, join } from 'path';
-import { existsSync, mkdirSync } from 'fs';
+import { memoryStorage } from 'multer';
+import { StorageService } from '../../common/storage/storage.service';
 
 @Controller('profiles')
 @UseGuards(JwtAuthGuard)
 export class ProfilesController {
-  constructor(private readonly profilesService: ProfilesService) {}
+  constructor(
+    private readonly profilesService: ProfilesService,
+    private readonly storageService: StorageService,
+  ) {}
 
   @Post()
   async createProfile(
@@ -73,21 +75,7 @@ export class ProfilesController {
   @Post('me/avatar')
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (_req, _file, cb) => {
-          const uploadDir = join(process.cwd(), 'uploads', 'avatars');
-          if (!existsSync(uploadDir)) {
-            mkdirSync(uploadDir, { recursive: true });
-          }
-          cb(null, uploadDir);
-        },
-        filename: (_req, file, cb) => {
-          const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extname(
-            file.originalname,
-          )}`;
-          cb(null, uniqueName);
-        },
-      }),
+      storage: memoryStorage(),
       fileFilter: (_req, file, cb) => {
         const allowed = ['image/png', 'image/jpeg', 'image/webp'];
         if (!allowed.includes(file.mimetype)) {
@@ -103,8 +91,21 @@ export class ProfilesController {
       throw new BadRequestException('No se recibio ningun avatar');
     }
 
-    return this.profilesService.update(req.user.userId, {
-      avatarUrl: `/uploads/avatars/${file.filename}`,
+    const storedAvatar = await this.storageService.upload({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      folder: 'avatars',
+      resourceType: 'image',
     });
+
+    return this.profilesService.update(req.user.userId, {
+      avatarUrl: storedAvatar.fileUrl,
+      avatarStorageProvider: storedAvatar.provider,
+      avatarStorageKey: storedAvatar.key,
+      avatarFileName: storedAvatar.fileName,
+      avatarMimeType: storedAvatar.mimeType,
+      avatarSize: storedAvatar.size,
+    } as any);
   }
 }

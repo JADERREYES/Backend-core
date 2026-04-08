@@ -14,8 +14,8 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname, join } from 'path';
+import { memoryStorage } from 'multer';
+import { extname } from 'path';
 import { Response } from 'express';
 import { DocumentsService } from './documents.service';
 import { DocumentsProcessingService } from './documents-processing.service';
@@ -27,6 +27,7 @@ import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateExtractedTextDto } from './dto/update-extracted-text.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
+import { StorageService } from '../../common/storage/storage.service';
 
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -43,6 +44,7 @@ export class DocumentsController {
     private readonly documentsService: DocumentsService,
     private readonly documentsProcessingService: DocumentsProcessingService,
     private readonly documentsRagService: DocumentsRagService,
+    private readonly storageService: StorageService,
   ) {}
 
   @Get()
@@ -75,11 +77,17 @@ export class DocumentsController {
   async download(@Param('id') id: string, @Res() res: Response) {
     const document = await this.documentsService.findOne(id);
 
-    if (!document.storagePath) {
+    const fileUrl = document.fileUrl || document.storagePath;
+
+    if (!fileUrl) {
       return res.status(404).json({ message: 'Documento sin archivo adjunto' });
     }
 
-    return res.download(document.storagePath, document.originalFileName || 'documento');
+    if (/^https?:\/\//i.test(fileUrl)) {
+      return res.redirect(fileUrl);
+    }
+
+    return res.download(fileUrl, document.originalFileName || 'documento');
   }
 
   @Post(':id/reindex')
@@ -100,19 +108,7 @@ export class DocumentsController {
   @Post('upload')
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (_req, _file, cb) => {
-          cb(null, join(process.cwd(), 'uploads', 'documents'));
-        },
-        filename: (_req, file, cb) => {
-          const extension = extname(file.originalname).toLowerCase();
-          const safeBase = file.originalname
-            .replace(extension, '')
-            .replace(/[^a-zA-Z0-9-_]/g, '-')
-            .slice(0, 60);
-          cb(null, `${Date.now()}-${safeBase}${extension}`);
-        },
-      }),
+      storage: memoryStorage(),
       fileFilter: (_req, file, cb) => {
         const extension = extname(file.originalname).toLowerCase();
         const validMime = ALLOWED_MIME_TYPES.includes(file.mimetype);
@@ -139,7 +135,18 @@ export class DocumentsController {
     file: any,
     @Body() payload: UploadDocumentDto,
   ) {
-    return this.documentsService.createFromUpload(payload, file);
+    const storedFile = await this.storageService.upload({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      folder: 'documents',
+      resourceType: 'raw',
+    });
+
+    return this.documentsService.createFromUpload(payload, {
+      ...file,
+      ...storedFile,
+    });
   }
 
   @Put(':id')
@@ -163,19 +170,7 @@ export class DocumentsController {
   @Put(':id/upload')
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (_req, _file, cb) => {
-          cb(null, join(process.cwd(), 'uploads', 'documents'));
-        },
-        filename: (_req, file, cb) => {
-          const extension = extname(file.originalname).toLowerCase();
-          const safeBase = file.originalname
-            .replace(extension, '')
-            .replace(/[^a-zA-Z0-9-_]/g, '-')
-            .slice(0, 60);
-          cb(null, `${Date.now()}-${safeBase}${extension}`);
-        },
-      }),
+      storage: memoryStorage(),
       fileFilter: (_req, file, cb) => {
         const extension = extname(file.originalname).toLowerCase();
         const validMime = ALLOWED_MIME_TYPES.includes(file.mimetype);
@@ -203,7 +198,18 @@ export class DocumentsController {
     file: any,
     @Body() payload: UploadDocumentDto,
   ) {
-    return this.documentsService.replaceFile(id, payload, file);
+    const storedFile = await this.storageService.upload({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      folder: 'documents',
+      resourceType: 'raw',
+    });
+
+    return this.documentsService.replaceFile(id, payload, {
+      ...file,
+      ...storedFile,
+    });
   }
 
   @Delete(':id')

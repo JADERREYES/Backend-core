@@ -12,9 +12,8 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { mkdirSync } from 'fs';
-import { extname, join } from 'path';
+import { memoryStorage } from 'multer';
+import { extname } from 'path';
 import { SubscriptionRequestsService } from './subscription-requests.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -33,21 +32,7 @@ const ALLOWED_MIME_TYPES = [
 ];
 
 const proofUploadOptions = {
-  storage: diskStorage({
-    destination: (_req, _file, cb) => {
-      const uploadDir = join(process.cwd(), 'uploads', 'subscription-proofs');
-      mkdirSync(uploadDir, { recursive: true });
-      cb(null, uploadDir);
-    },
-    filename: (_req, file, cb) => {
-      const extension = extname(file.originalname).toLowerCase();
-      const safeBase = file.originalname
-        .replace(extension, '')
-        .replace(/[^a-zA-Z0-9-_]/g, '-')
-        .slice(0, 60);
-      cb(null, `${Date.now()}-${safeBase}${extension}`);
-    },
-  }),
+  storage: memoryStorage(),
   fileFilter: (_req: any, file: any, cb: any) => {
     const extension = extname(file.originalname).toLowerCase();
     const validExtension = ALLOWED_EXTENSIONS.includes(extension);

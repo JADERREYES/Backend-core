@@ -14,9 +14,11 @@ import { User, UserSchema } from '../users/schemas/user.schema';
 import { PlansModule } from '../plans/plans.module';
 import { PaymentMethodsModule } from '../payment-methods/payment-methods.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
+import { StorageModule } from '../../common/storage/storage.module';
 
 @Module({
   imports: [
+    StorageModule,
     PlansModule,
     PaymentMethodsModule,
     SubscriptionsModule,

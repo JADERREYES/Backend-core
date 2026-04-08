@@ -13,9 +13,11 @@ import {
   AdminDocument,
   AdminDocumentSchema,
 } from './schemas/document.schema';
+import { StorageModule } from '../../common/storage/storage.module';
 
 @Module({
   imports: [
+    StorageModule,
     MongooseModule.forFeature([
       { name: AdminDocument.name, schema: AdminDocumentSchema },
       { name: DocumentChunk.name, schema: DocumentChunkSchema },

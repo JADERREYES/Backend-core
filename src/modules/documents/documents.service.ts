@@ -1,15 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { existsSync, mkdirSync, unlinkSync } from 'fs';
-import { join } from 'path';
 import { AdminDocument } from './schemas/document.schema';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { DocumentsProcessingService } from './documents-processing.service';
-
-const DOCUMENTS_UPLOAD_DIR = join(process.cwd(), 'uploads', 'documents');
+import { StorageService } from '../../common/storage/storage.service';
 
 @Injectable()
 export class DocumentsService {
@@ -17,9 +14,8 @@ export class DocumentsService {
     @InjectModel(AdminDocument.name)
     private documentModel: Model<AdminDocument>,
     private readonly documentsProcessingService: DocumentsProcessingService,
-  ) {
-    this.ensureUploadDir();
-  }
+    private readonly storageService: StorageService,
+  ) {}
 
   async findAll() {
     const documents = await this.documentModel
@@ -67,11 +63,14 @@ export class DocumentsService {
       content: payload.content || '',
       sourceType: 'file',
       originalFileName: file.originalname,
-      storedFileName: file.filename,
+      storedFileName: file.fileName || file.filename || file.originalname,
       mimeType: file.mimetype,
       fileSize: file.size,
-      storagePath: file.path,
-      storageProvider: 'local',
+      storagePath: file.provider === 'local' ? file.key : file.fileUrl,
+      fileUrl: file.fileUrl,
+      storageProvider: file.provider,
+      storageKey: file.key,
+      storageResourceType: file.resourceType,
       extractionStatus: 'pending',
       extractedText: '',
       extractionError: '',
@@ -110,7 +109,7 @@ export class DocumentsService {
       throw new NotFoundException('Documento no encontrado');
     }
 
-    this.deleteStoredFile(existing.storagePath);
+    await this.deleteStoredFile(existing);
 
     const updated = await this.documentModel
       .findByIdAndUpdate(
@@ -128,11 +127,14 @@ export class DocumentsService {
             content: payload.content ?? existing.content ?? '',
             sourceType: 'file',
             originalFileName: file.originalname,
-            storedFileName: file.filename,
+            storedFileName: file.fileName || file.filename || file.originalname,
             mimeType: file.mimetype,
             fileSize: file.size,
-            storagePath: file.path,
-            storageProvider: 'local',
+            storagePath: file.provider === 'local' ? file.key : file.fileUrl,
+            fileUrl: file.fileUrl,
+            storageProvider: file.provider,
+            storageKey: file.key,
+            storageResourceType: file.resourceType,
             extractionStatus: 'pending',
             extractedText: '',
             extractionError: '',
@@ -161,25 +163,17 @@ export class DocumentsService {
       throw new NotFoundException('Documento no encontrado');
     }
 
-    this.deleteStoredFile((deleted as any).storagePath);
+    await this.deleteStoredFile(deleted as any);
     return { deleted: true };
   }
 
-  getUploadRoot() {
-    this.ensureUploadDir();
-    return DOCUMENTS_UPLOAD_DIR;
-  }
+  private async deleteStoredFile(document?: any) {
+    if (!document?.storageKey) return;
 
-  private ensureUploadDir() {
-    if (!existsSync(DOCUMENTS_UPLOAD_DIR)) {
-      mkdirSync(DOCUMENTS_UPLOAD_DIR, { recursive: true });
-    }
-  }
-
-  private deleteStoredFile(storagePath?: string) {
-    if (storagePath && existsSync(storagePath)) {
-      unlinkSync(storagePath);
-    }
+    await this.storageService.delete(
+      document.storageKey,
+      (document.storageResourceType as any) || 'raw',
+    );
   }
 
   private fileNameWithoutExtension(fileName: string) {
@@ -193,7 +187,8 @@ export class DocumentsService {
       ...document,
       extractedText: includeText ? document.extractedText || '' : undefined,
       id: document._id?.toString?.() || document.id,
-      hasFile: !!document.storagePath,
+      fileUrl: document.fileUrl || document.storagePath || '',
+      hasFile: !!(document.fileUrl || document.storagePath),
       extractedTextAvailable: !!document.extractedText,
       systemStatus,
       lastUpdated: document.updatedAt || null,
