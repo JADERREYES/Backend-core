@@ -63,6 +63,7 @@ export class DocumentsController {
       title: document.title,
       extractedText: document.extractedText || '',
       extractedTextLength: document.extractedTextLength || 0,
+      systemStatus: document.systemStatus,
       extractionStatus: document.extractionStatus,
       processingStatus: document.processingStatus,
       processingError: document.processingError || '',

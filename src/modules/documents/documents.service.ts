@@ -187,13 +187,41 @@ export class DocumentsService {
   }
 
   private serialize(document: any, includeText = false) {
+    const systemStatus = this.buildSystemStatus(document);
+
     return {
       ...document,
       extractedText: includeText ? document.extractedText || '' : undefined,
       id: document._id?.toString?.() || document.id,
       hasFile: !!document.storagePath,
       extractedTextAvailable: !!document.extractedText,
+      systemStatus,
       lastUpdated: document.updatedAt || null,
     };
+  }
+
+  private buildSystemStatus(document: any) {
+    const processingStatus = String(document.processingStatus || '');
+    const extractionStatus = String(document.extractionStatus || '');
+    const extractedText = String(document.extractedText || '').trim();
+
+    if (
+      processingStatus === 'uploaded' ||
+      processingStatus === 'processing' ||
+      extractionStatus === 'pending' ||
+      extractionStatus === 'processing'
+    ) {
+      return 'pending';
+    }
+
+    if (processingStatus === 'failed') {
+      return 'failed';
+    }
+
+    if (document.sourceType === 'file' && extractionStatus === 'failed' && !extractedText) {
+      return 'uploaded_not_extracted';
+    }
+
+    return 'processed';
   }
 }

@@ -111,6 +111,7 @@ export class DocumentsProcessingService implements OnModuleDestroy {
       let extractedText = document.extractedText || '';
       let extractionStatus = document.extractionStatus || 'not_required';
       let extractionError = '';
+      let processingError = '';
 
       if (mode === 'full' && document.sourceType === 'file' && document.storagePath) {
         extractionStatus = 'processing';
@@ -120,28 +121,15 @@ export class DocumentsProcessingService implements OnModuleDestroy {
           })
           .exec();
 
-        try {
-          extractedText = await this.extractorService.extractFromFile(
-            document.storagePath,
-            document.mimeType,
-          );
-          extractionStatus = 'completed';
-        } catch (error: any) {
-          extractionStatus = 'failed';
-          extractionError = error?.message || 'No se pudo extraer texto';
-          await this.documentModel
-            .findByIdAndUpdate(documentId, {
-              $set: {
-                extractionStatus,
-                extractionError,
-                processingStatus: 'failed',
-                processingError: extractionError,
-                lastProcessedAt: new Date(),
-              },
-            })
-            .exec();
-          return this.documentModel.findById(documentId).lean().exec();
-        }
+        const extractionResult = await this.extractorService.extractFromFile(
+          document.storagePath,
+          document.mimeType,
+        );
+
+        extractedText = extractionResult.text;
+        extractionStatus = extractionResult.status;
+        extractionError = extractionResult.error;
+        processingError = extractionResult.status === 'failed' ? extractionResult.error : '';
       } else if (mode === 'full' && document.sourceType === 'manual') {
         extractedText = this.extractorService.normalizeText(document.content || '');
         extractionStatus = 'not_required';
@@ -155,6 +143,7 @@ export class DocumentsProcessingService implements OnModuleDestroy {
             extractionStatus,
             extractionError,
             processingStatus: 'processed',
+            processingError,
           },
         })
         .exec();
@@ -165,7 +154,7 @@ export class DocumentsProcessingService implements OnModuleDestroy {
         .findByIdAndUpdate(documentId, {
           $set: {
             processingStatus: 'indexed',
-            processingError: '',
+            processingError,
             lastProcessedAt: new Date(),
           },
         })
