@@ -5,19 +5,55 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
 import { AppModule } from './app.module';
 
+function normalizeOrigin(origin: string) {
+  return origin
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const configService = app.get(ConfigService);
+
+  const defaultOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:5173',
+    'http://localhost:5174',
+  ].map(normalizeOrigin);
+
+  const configuredOrigins = (configService.get<string>('CORS_ORIGINS') || '')
+    .split(/[,\n]/)
+    .map(normalizeOrigin)
+    .filter(Boolean);
+
+  const allowedOrigins = new Set(
+    new Set([...defaultOrigins, ...configuredOrigins]),
+  );
 
   app.enableCors({
-    origin: [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://localhost:5173',
-      'http://localhost:5174',
-    ],
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const normalizedOrigin = normalizeOrigin(origin);
+      callback(null, allowedOrigins.has(normalizedOrigin));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+    ],
+    optionsSuccessStatus: 204,
+    preflightContinue: false,
   });
 
   app.useGlobalPipes(
@@ -28,7 +64,6 @@ async function bootstrap() {
     }),
   );
 
-  const configService = app.get(ConfigService);
   const storageProvider = configService.get<string>('STORAGE_PROVIDER') || 'local';
 
   if (storageProvider === 'local') {

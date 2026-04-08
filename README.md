@@ -19,7 +19,10 @@ PORT=3001
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DB_NAME=test
 JWT_SECRET=change-me
-JWT_EXPIRES_IN=7d
+JWT_EXPIRES_IN=604800
+STORAGE_PROVIDER=vercel-blob
+BLOB_READ_WRITE_TOKEN=
+CORS_ORIGINS=http://localhost:5173,http://localhost:5174
 OPENAI_API_KEY=
 OPENAI_CHAT_MODEL=gpt-3.5-turbo
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
@@ -31,6 +34,8 @@ Notas:
 
 - La base activa la define `MONGODB_DB_NAME`. En el entorno actual validado se usa `test`.
 - Deja `MONGODB_URI` sin nombre de base embebido para evitar confundir la URI con la base efectiva.
+- En produccion con Vercel Blob usa `STORAGE_PROVIDER=vercel-blob` y define `BLOB_READ_WRITE_TOKEN`.
+- `CORS_ORIGINS` debe incluir las URLs reales de `frontend-usuario` y `frontend-super-admin`, separadas por coma.
 - `OPENAI_API_KEY` es necesaria para `/ai/chat` y `/ai/chat-session`.
 - `MONGODB_ATLAS_VECTOR_INDEX` es opcional. Si no existe, el retrieval documental usa fallback local.
 - `REDIS_URL` es opcional. Si no existe, el procesamiento documental usa fallback local.
