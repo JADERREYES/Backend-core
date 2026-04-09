@@ -1,4 +1,5 @@
 import {
+  IsNumberString,
   IsIn,
   IsOptional,
   IsString,
@@ -21,6 +22,23 @@ export class CreateSubscriptionRequestDto {
 
   @IsOptional()
   requestedTokens?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  payerName?: string;
+
+  @IsString()
+  @MaxLength(40)
+  payerPhone: string;
+
+  @IsNumberString()
+  reportedAmount: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  paidAtReference?: string;
 
   @IsOptional()
   @IsString()

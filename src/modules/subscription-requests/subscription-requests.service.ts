@@ -57,6 +57,10 @@ export class SubscriptionRequestsService {
       throw new BadRequestException('No se puede solicitar el plan free por pago manual');
     }
 
+    if (plan.category === 'trial') {
+      throw new BadRequestException('El plan trial no se solicita por pago manual');
+    }
+
     const uploadedProof = file
       ? await this.storageService.upload({
           buffer: file.buffer,
@@ -99,6 +103,10 @@ export class SubscriptionRequestsService {
         accountNumber: paymentMethod.accountNumber,
         instructions: paymentMethod.instructions,
       },
+      payerName: dto.payerName?.trim() || '',
+      payerPhone: dto.payerPhone?.trim() || '',
+      reportedAmount: Number(dto.reportedAmount || 0),
+      paidAtReference: dto.paidAtReference?.trim() || '',
       message: dto.message?.trim() || '',
       proofUrl: uploadedProof?.fileUrl || '',
       proofStorageProvider: uploadedProof?.provider || '',
@@ -109,7 +117,7 @@ export class SubscriptionRequestsService {
       receiptFileName: uploadedProof?.fileName || file?.originalname || '',
       proofMimeType: uploadedProof?.mimeType || file?.mimetype || '',
       proofSize: uploadedProof?.size || file?.size || 0,
-      status: file ? 'receipt_uploaded' : 'new',
+      status: file ? 'receipt_uploaded' : 'submitted',
       adminNotes: '',
     });
   }

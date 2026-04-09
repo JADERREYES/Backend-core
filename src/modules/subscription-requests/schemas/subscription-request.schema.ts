@@ -99,6 +99,18 @@ export class SubscriptionRequest extends Document {
   message: string;
 
   @Prop({ default: '' })
+  payerName: string;
+
+  @Prop({ default: '' })
+  payerPhone: string;
+
+  @Prop({ type: Number, default: 0 })
+  reportedAmount: number;
+
+  @Prop({ default: '' })
+  paidAtReference: string;
+
+  @Prop({ default: '' })
   proofUrl: string;
 
   @Prop({ default: '' })

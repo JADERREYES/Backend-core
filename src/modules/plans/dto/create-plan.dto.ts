@@ -52,9 +52,18 @@ export class CreatePlanDto {
   @MaxLength(1000)
   description?: string;
 
-  @IsIn(['free', 'premium', 'extra_tokens', 'custom', 'subscription', 'tokens'])
+  @IsIn([
+    'free',
+    'trial',
+    'premium',
+    'extra_tokens',
+    'custom',
+    'subscription',
+    'tokens',
+  ])
   category:
     | 'free'
+    | 'trial'
     | 'premium'
     | 'extra_tokens'
     | 'custom'
