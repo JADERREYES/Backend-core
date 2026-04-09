@@ -20,6 +20,14 @@ const DEFAULT_LIMITS = {
   extraTokens: 0,
 };
 
+const TRIAL_LIMITS = {
+  maxChatsPerMonth: 20,
+  maxMessagesPerMonth: 200,
+  maxDocumentsMB: 75,
+  monthlyTokens: 250,
+  extraTokens: 0,
+};
+
 @Injectable()
 export class PlansService {
   constructor(@InjectModel(Plan.name) private readonly planModel: Model<Plan>) {}
@@ -199,6 +207,36 @@ export class PlansService {
         isCustomizable: false,
         displayOrder: 0,
         sortOrder: 0,
+      });
+    }
+
+    return plan;
+  }
+
+  async ensureDefaultTrialPlan() {
+    let plan = await this.planModel
+      .findOne({ category: 'trial', code: 'trial' })
+      .exec();
+
+    if (!plan) {
+      plan = await this.planModel.create({
+        name: 'Trial',
+        code: 'trial',
+        description: 'Acceso de prueba por tiempo limitado',
+        category: 'trial',
+        price: 0,
+        currency: 'COP',
+        durationDays: 5,
+        tokenLimit: TRIAL_LIMITS.monthlyTokens,
+        dailyMessageLimit: 0,
+        monthlyMessageLimit: TRIAL_LIMITS.maxMessagesPerMonth,
+        features: ['trial'],
+        limits: TRIAL_LIMITS,
+        isActive: true,
+        isDefault: false,
+        isCustomizable: false,
+        displayOrder: 1,
+        sortOrder: 1,
       });
     }
 

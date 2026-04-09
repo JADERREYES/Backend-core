@@ -14,7 +14,7 @@ export class Plan extends Document {
 
   @Prop({
     required: true,
-    enum: ['free', 'premium', 'extra_tokens', 'custom', 'subscription', 'tokens'],
+    enum: ['free', 'trial', 'premium', 'extra_tokens', 'custom', 'subscription', 'tokens'],
     default: 'free',
   })
   category: string;

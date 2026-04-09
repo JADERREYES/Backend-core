@@ -16,6 +16,14 @@ const DEFAULT_LIMITS = {
   extraTokens: 0,
 };
 
+const TRIAL_LIMITS = {
+  maxChatsPerMonth: 20,
+  maxMessagesPerMonth: 200,
+  maxDocumentsMB: 75,
+  monthlyTokens: 250,
+  extraTokens: 0,
+};
+
 @Injectable()
 export class SubscriptionsService {
   constructor(
@@ -80,7 +88,64 @@ export class SubscriptionsService {
       subscription = created.toObject();
     }
 
-    return subscription;
+    return this.resolveLifecycleState(subscription);
+  }
+
+  async createTrialForNewUser(userId: string) {
+    const userIdObj = new Types.ObjectId(userId);
+    const existing = await this.subscriptionModel
+      .findOne({ userId: userIdObj })
+      .lean()
+      .exec();
+
+    if (existing) {
+      return this.resolveLifecycleState(existing);
+    }
+
+    const trialPlan = await this.plansService.ensureDefaultTrialPlan();
+    const startDate = new Date();
+    const endDate = new Date(
+      startDate.getTime() + 5 * 24 * 60 * 60 * 1000,
+    );
+
+    const created = await this.subscriptionModel.create({
+      userId: userIdObj,
+      planId: trialPlan._id,
+      planName: trialPlan.name,
+      planCode: trialPlan.code,
+      planCategory: 'trial',
+      status: 'active',
+      amount: 0,
+      currency: trialPlan.currency || 'COP',
+      limits: {
+        ...DEFAULT_LIMITS,
+        ...TRIAL_LIMITS,
+        ...(trialPlan.limits || {}),
+      },
+      currentUsage: {
+        chatsUsed: 0,
+        messagesUsed: 0,
+        documentsUsedMB: 0,
+        tokensUsed: 0,
+      },
+      autoRenew: false,
+      startDate,
+      startedAt: startDate,
+      endDate,
+      expiresAt: endDate,
+      tokenLimit:
+        trialPlan.tokenLimit ?? trialPlan.limits?.monthlyTokens ?? TRIAL_LIMITS.monthlyTokens,
+      tokensRemaining:
+        trialPlan.tokenLimit ?? trialPlan.limits?.monthlyTokens ?? TRIAL_LIMITS.monthlyTokens,
+      dailyMessageLimit: trialPlan.dailyMessageLimit ?? 0,
+      monthlyMessageLimit:
+        trialPlan.monthlyMessageLimit ??
+        trialPlan.limits?.maxMessagesPerMonth ??
+        TRIAL_LIMITS.maxMessagesPerMonth,
+      notes: 'Tu trial de 5 dias esta activo.',
+    });
+
+    return created.toObject();
   }
 
   async create(userId: string, createSubscriptionDto: CreateSubscriptionDto) {
@@ -123,11 +188,19 @@ export class SubscriptionsService {
   async findByUserId(userId: string) {
     const subscription = await this.ensureUserSubscription(userId);
     const usageSnapshot = this.buildUsageSnapshot(subscription);
+    const now = Date.now();
+    const endDate = subscription.endDate ? new Date(subscription.endDate) : null;
+    const remainingMs = endDate ? endDate.getTime() - now : 0;
+    const trialDaysRemaining =
+      subscription.planCode === 'trial' && remainingMs > 0
+        ? Math.ceil(remainingMs / (24 * 60 * 60 * 1000))
+        : 0;
 
     return {
       ...subscription,
       usageSnapshot,
       upgradeRecommendation: usageSnapshot.recommendedPlanCategory,
+      trialDaysRemaining,
     };
   }
 
@@ -222,7 +295,11 @@ export class SubscriptionsService {
       users.map((user: any) => [user._id.toString(), user]),
     );
 
-    return subscriptions.map((subscription: any) => {
+    const normalizedSubscriptions = await Promise.all(
+      subscriptions.map((subscription: any) => this.resolveLifecycleState(subscription)),
+    );
+
+    return normalizedSubscriptions.map((subscription: any) => {
       const user = usersById.get(subscription.userId.toString());
 
       return {
@@ -410,10 +487,90 @@ export class SubscriptionsService {
       throw new NotFoundException('Suscripcion no encontrada');
     }
 
+    const resolved = await this.resolveLifecycleState(item);
+
     return {
-      ...item,
+      ...resolved,
       usageSnapshot: this.buildUsageSnapshot(item),
     };
+  }
+
+  private async resolveLifecycleState(subscription: any) {
+    if (!subscription?._id) {
+      return subscription;
+    }
+
+    const expiresAt = subscription.expiresAt || subscription.endDate;
+    if (!expiresAt) {
+      return subscription;
+    }
+
+    const expirationDate = new Date(expiresAt);
+    if (Number.isNaN(expirationDate.getTime()) || expirationDate > new Date()) {
+      return subscription;
+    }
+
+    if (subscription.planCode === 'free') {
+      return subscription;
+    }
+
+    return this.downgradeToFree(subscription);
+  }
+
+  private async downgradeToFree(subscription: any) {
+    const freePlan = await this.plansService.ensureDefaultFreePlan();
+    const now = new Date();
+    const nextEndDate = new Date(
+      now.getTime() + freePlan.durationDays * 24 * 60 * 60 * 1000,
+    );
+    const isTrial = subscription.planCode === 'trial' || subscription.planCategory === 'trial';
+
+    const updated = await this.subscriptionModel
+      .findByIdAndUpdate(
+        subscription._id,
+        {
+          $set: {
+            planId: freePlan._id,
+            planName: freePlan.name,
+            planCode: freePlan.code,
+            planCategory: 'free',
+            status: isTrial ? 'active' : 'expired',
+            amount: 0,
+            currency: freePlan.currency || 'COP',
+            limits: {
+              ...DEFAULT_LIMITS,
+              ...(freePlan.limits || {}),
+            },
+            currentUsage: {
+              chatsUsed: 0,
+              messagesUsed: 0,
+              documentsUsedMB: 0,
+              tokensUsed: 0,
+            },
+            startDate: now,
+            startedAt: now,
+            endDate: nextEndDate,
+            expiresAt: nextEndDate,
+            tokenLimit:
+              freePlan.tokenLimit ?? freePlan.limits?.monthlyTokens ?? DEFAULT_LIMITS.monthlyTokens,
+            tokensRemaining:
+              freePlan.tokenLimit ?? freePlan.limits?.monthlyTokens ?? DEFAULT_LIMITS.monthlyTokens,
+            dailyMessageLimit: freePlan.dailyMessageLimit ?? 0,
+            monthlyMessageLimit:
+              freePlan.monthlyMessageLimit ??
+              freePlan.limits?.maxMessagesPerMonth ??
+              DEFAULT_LIMITS.maxMessagesPerMonth,
+            notes: isTrial
+              ? 'Tu trial finalizo y tu cuenta paso automaticamente a Free.'
+              : 'Tu plan pago vencio y tu cuenta paso a Free. Necesitas renovar para recuperar beneficios premium.',
+          },
+        },
+        { new: true },
+      )
+      .lean()
+      .exec();
+
+    return updated || subscription;
   }
 
   private buildUsageSnapshot(subscription: any) {

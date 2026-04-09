@@ -7,11 +7,13 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { UsersModule } from '../users/users.module';
 import { ProfilesModule } from '../profiles/profiles.module';
+import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 
 @Module({
   imports: [
     UsersModule,
     ProfilesModule,
+    SubscriptionsModule,
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],

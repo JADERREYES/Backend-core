@@ -17,7 +17,7 @@ export class Subscription extends Document {
 
   @Prop({
     type: String,
-    enum: ['free', 'premium', 'extra_tokens', 'custom'],
+    enum: ['free', 'trial', 'premium', 'extra_tokens', 'custom'],
     default: 'free',
   })
   planCategory: string;

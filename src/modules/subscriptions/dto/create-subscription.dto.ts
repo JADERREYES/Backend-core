@@ -52,8 +52,8 @@ export class CreateSubscriptionDto {
   @MaxLength(60)
   planCode: string;
 
-  @IsIn(['free', 'premium', 'extra_tokens', 'custom'])
-  planCategory: 'free' | 'premium' | 'extra_tokens' | 'custom';
+  @IsIn(['free', 'trial', 'premium', 'extra_tokens', 'custom'])
+  planCategory: 'free' | 'trial' | 'premium' | 'extra_tokens' | 'custom';
 
   @IsOptional()
   @IsIn(['active', 'expired', 'canceled', 'pending_activation'])

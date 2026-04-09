@@ -6,12 +6,14 @@ import { JwtService } from '@nestjs/jwt';
 import { User } from '../users/schemas/user.schema';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     @InjectModel(User.name) private userModel: Model<User>,
     private jwtService: JwtService,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
   async register(registerDto: RegisterDto) {
@@ -32,6 +34,7 @@ export class AuthService {
     });
 
     await user.save();
+    await this.subscriptionsService.createTrialForNewUser(user._id.toString());
 
     const token = this.generateToken(
       user._id.toString(),
@@ -64,6 +67,7 @@ export class AuthService {
 
     user.lastLoginAt = new Date();
     await user.save();
+    await this.subscriptionsService.ensureUserSubscription(user._id.toString());
 
     const token = this.generateToken(
       user._id.toString(),
