@@ -15,6 +15,9 @@ export class SubscriptionRequest extends Document {
   @Prop({ default: 'free' })
   currentPlanCode: string;
 
+  @Prop({ default: 'Free' })
+  currentPlanName: string;
+
   @Prop({
     type: {
       used: { type: Number, default: 0 },
@@ -167,6 +170,45 @@ export class SubscriptionRequest extends Document {
 
   @Prop({ type: Types.ObjectId, ref: 'Subscription', default: null })
   activatedSubscriptionId?: Types.ObjectId | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'Plan', default: null })
+  activatedPlanId?: Types.ObjectId | null;
+
+  @Prop({ default: '' })
+  activatedPlanName?: string;
+
+  @Prop({ default: '' })
+  activatedPlanCode?: string;
+
+  @Prop({ default: '' })
+  activatedPlanCategory?: string;
+
+  @Prop({ default: '' })
+  activatedSubscriptionStatus?: string;
+
+  @Prop({ type: Number, default: 0 })
+  activatedAmount?: number;
+
+  @Prop({ default: 'COP' })
+  activatedCurrency?: string;
+
+  @Prop({
+    type: {
+      maxChatsPerMonth: { type: Number, default: 10 },
+      maxMessagesPerMonth: { type: Number, default: 100 },
+      maxDocumentsMB: { type: Number, default: 50 },
+      monthlyTokens: { type: Number, default: 100 },
+      extraTokens: { type: Number, default: 0 },
+    },
+    default: {},
+  })
+  activatedLimits?: Record<string, number>;
+
+  @Prop({ type: Date, default: null })
+  activatedStartDate?: Date | null;
+
+  @Prop({ type: Date, default: null })
+  activatedEndDate?: Date | null;
 }
 
 export const SubscriptionRequestSchema =

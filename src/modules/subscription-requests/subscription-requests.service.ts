@@ -76,6 +76,7 @@ export class SubscriptionRequestsService {
       userName: user.name || user.email.split('@')[0],
       userEmail: user.email,
       currentPlanCode: currentSubscription.planCode || 'free',
+      currentPlanName: currentSubscription.planName || 'Free',
       currentUsage: {
         used: currentSubscription?.usageSnapshot?.messages?.used || 0,
         limit: currentSubscription?.usageSnapshot?.messages?.limit || 100,
@@ -166,6 +167,10 @@ export class SubscriptionRequestsService {
     adminUserId: string,
     dto: UpdateSubscriptionRequestStatusDto,
   ) {
+    if (dto.status === 'activated') {
+      return this.activate(id, adminUserId, {});
+    }
+
     const updated = await this.subscriptionRequestModel
       .findByIdAndUpdate(
         id,
@@ -230,6 +235,10 @@ export class SubscriptionRequestsService {
       throw new BadRequestException('No se puede activar una solicitud rechazada');
     }
 
+    const previousSubscription = await this.subscriptionsService.findByUserId(
+      request.userId.toString(),
+    );
+
     const subscription = await this.subscriptionsService.activatePlanForUser({
       userId: request.userId.toString(),
       adminUserId,
@@ -246,6 +255,7 @@ export class SubscriptionRequestsService {
       limits: request.planSnapshot?.limits || {},
       requestId: request._id.toString(),
       adminNotes: dto.adminNotes || request.adminNotes || '',
+      paymentMethodCode: request.paymentMethodSnapshot?.code || '',
     });
 
     const updated = await this.subscriptionRequestModel
@@ -258,6 +268,28 @@ export class SubscriptionRequestsService {
             reviewedBy: new Types.ObjectId(adminUserId),
             reviewedAt: new Date(),
             activatedSubscriptionId: subscription._id,
+            currentPlanCode:
+              request.currentPlanCode || previousSubscription.planCode || 'free',
+            currentPlanName:
+              request.currentPlanName || previousSubscription.planName || 'Free',
+            activatedPlanId: subscription.planId || null,
+            activatedPlanName: subscription.planName || request.planName,
+            activatedPlanCode: subscription.planCode || request.planCode,
+            activatedPlanCategory:
+              subscription.planCategory || (request.requestType as string),
+            activatedSubscriptionStatus: subscription.status || 'active',
+            activatedAmount:
+              typeof subscription.amount === 'number'
+                ? subscription.amount
+                : request.planSnapshot?.price || 0,
+            activatedCurrency:
+              subscription.currency || request.planSnapshot?.currency || 'COP',
+            activatedLimits:
+              subscription.limits || request.planSnapshot?.limits || {},
+            activatedStartDate:
+              subscription.startDate || subscription.startedAt || new Date(),
+            activatedEndDate:
+              subscription.endDate || subscription.expiresAt || null,
           },
         },
         { new: true },
