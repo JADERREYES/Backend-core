@@ -13,6 +13,27 @@ function normalizeOrigin(origin: string) {
     .toLowerCase();
 }
 
+function isAllowedVercelPreview(origin: string) {
+  try {
+    const { protocol, hostname } = new URL(origin);
+
+    if (protocol !== 'https:') {
+      return false;
+    }
+
+    if (!hostname.endsWith('.vercel.app')) {
+      return false;
+    }
+
+    return (
+      hostname.startsWith('frontend-usuario-') ||
+      hostname.startsWith('frontend-super-admin-')
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
@@ -41,7 +62,11 @@ async function bootstrap() {
       }
 
       const normalizedOrigin = normalizeOrigin(origin);
-      callback(null, allowedOrigins.has(normalizedOrigin));
+      const isAllowed =
+        allowedOrigins.has(normalizedOrigin) ||
+        isAllowedVercelPreview(normalizedOrigin);
+
+      callback(null, isAllowed);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
