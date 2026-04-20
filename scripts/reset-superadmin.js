@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const dns = require('dns');
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 
@@ -23,9 +24,22 @@ async function main() {
   const dbName = env.MONGODB_DB_NAME || 'test';
   const email = process.env.SUPERADMIN_EMAIL || 'superadmin@menteamiga.com';
   const password = process.env.SUPERADMIN_PASSWORD || 'TempMente2026!';
+  const rawDnsServers =
+    process.env.MONGODB_DNS_SERVERS || env.MONGODB_DNS_SERVERS || '';
 
   if (!mongoUri) {
     throw new Error('MONGODB_URI no esta definido');
+  }
+
+  if (rawDnsServers.trim()) {
+    const dnsServers = rawDnsServers
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (dnsServers.length > 0) {
+      dns.setServers(dnsServers);
+    }
   }
 
   const connection = await mongoose.createConnection(mongoUri, { dbName }).asPromise();
