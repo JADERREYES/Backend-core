@@ -10,7 +10,10 @@ import { CreatePaymentMethodDto } from './dto/create-payment-method.dto';
 import { UpdatePaymentMethodDto } from './dto/update-payment-method.dto';
 
 const normalizeCode = (value: string) =>
-  value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-');
 
 @Injectable()
 export class PaymentMethodsService {
@@ -38,7 +41,10 @@ export class PaymentMethodsService {
   }
 
   async findById(id: string) {
-    const paymentMethod = await this.paymentMethodModel.findById(id).lean().exec();
+    const paymentMethod = await this.paymentMethodModel
+      .findById(id)
+      .lean()
+      .exec();
 
     if (!paymentMethod) {
       throw new NotFoundException('Metodo de pago no encontrado');
@@ -49,7 +55,10 @@ export class PaymentMethodsService {
 
   async create(dto: CreatePaymentMethodDto) {
     const code = normalizeCode(dto.code || dto.name);
-    const exists = await this.paymentMethodModel.findOne({ code }).lean().exec();
+    const exists = await this.paymentMethodModel
+      .findOne({ code })
+      .lean()
+      .exec();
 
     if (exists) {
       throw new ConflictException('Ya existe un metodo de pago con ese codigo');
@@ -78,7 +87,9 @@ export class PaymentMethodsService {
         .exec();
 
       if (exists) {
-        throw new ConflictException('Ya existe un metodo de pago con ese codigo');
+        throw new ConflictException(
+          'Ya existe un metodo de pago con ese codigo',
+        );
       }
     }
 
@@ -138,7 +149,10 @@ export class PaymentMethodsService {
   }
 
   async remove(id: string) {
-    const removed = await this.paymentMethodModel.findByIdAndDelete(id).lean().exec();
+    const removed = await this.paymentMethodModel
+      .findByIdAndDelete(id)
+      .lean()
+      .exec();
 
     if (!removed) {
       throw new NotFoundException('Metodo de pago no encontrado');
@@ -157,7 +171,9 @@ export class PaymentMethodsService {
       return activeMethod;
     }
 
-    let paymentMethod = await this.paymentMethodModel.findOne({ code: 'nequi' }).exec();
+    let paymentMethod = await this.paymentMethodModel
+      .findOne({ code: 'nequi' })
+      .exec();
 
     if (!paymentMethod) {
       paymentMethod = await this.paymentMethodModel.create({
