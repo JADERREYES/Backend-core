@@ -243,14 +243,9 @@ function validateStorageAllowedRemoteHosts(env: EnvironmentVariables) {
 }
 
 function validateNotificationProviders(env: EnvironmentVariables) {
-  const isProduction = env.NODE_ENV === 'production';
-  const emailProvider = env.EMAIL_PROVIDER;
+  const emailProvider = env.EMAIL_PROVIDER?.trim() || 'none';
   if (emailProvider && !['none', 'resend'].includes(emailProvider)) {
     throw new Error('EMAIL_PROVIDER must be none or resend');
-  }
-
-  if (isProduction && emailProvider !== 'resend') {
-    throw new Error('EMAIL_PROVIDER=resend is required in production');
   }
 
   if (emailProvider === 'resend') {
@@ -258,13 +253,9 @@ function validateNotificationProviders(env: EnvironmentVariables) {
     requireNonEmpty(env, 'EMAIL_FROM');
   }
 
-  const smsProvider = env.SMS_PROVIDER;
+  const smsProvider = env.SMS_PROVIDER?.trim() || 'none';
   if (smsProvider && !['none', 'twilio'].includes(smsProvider)) {
     throw new Error('SMS_PROVIDER must be none or twilio');
-  }
-
-  if (isProduction && smsProvider !== 'twilio') {
-    throw new Error('SMS_PROVIDER=twilio is required in production');
   }
 
   if (smsProvider === 'twilio') {
