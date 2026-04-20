@@ -18,4 +18,8 @@ export class LoginDto {
   @IsOptional()
   @IsBoolean()
   adminOnly?: boolean;
+
+  @IsOptional()
+  @IsString()
+  twoFactorCode?: string;
 }

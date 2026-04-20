@@ -1,16 +1,28 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { del, put } from '@vercel/blob';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
-import { extname, join } from 'path';
+import { extname, join, resolve, sep } from 'path';
 import {
   StoredFile,
-  StorageResourceType,
   UploadFolder,
   UploadToStorageInput,
 } from './storage.types';
+
+const SENSITIVE_UPLOAD_FOLDERS: UploadFolder[] = [
+  'documents',
+  'subscription-proofs',
+];
+
+const isSensitiveFolder = (folder: UploadFolder) =>
+  SENSITIVE_UPLOAD_FOLDERS.includes(folder);
 
 @Injectable()
 export class StorageService {
@@ -56,37 +68,45 @@ export class StorageService {
     return this.uploadToLocal(input);
   }
 
-  async delete(key?: string, resourceType: StorageResourceType = 'raw') {
+  async delete(key?: string) {
     if (!key) return;
 
     if (this.provider === 'vercel-blob') {
-      await this.deleteFromVercelBlob(key, resourceType);
+      await this.deleteFromVercelBlob(key);
       return;
     }
 
-    if (existsSync(key)) {
-      await unlink(key).catch(() => undefined);
+    const localPath = this.resolveLocalReadPath(key);
+    if (existsSync(localPath)) {
+      await unlink(localPath).catch(() => undefined);
     }
   }
 
   async read(location: string) {
     if (!location) {
-      throw new InternalServerErrorException('Ubicacion de archivo no disponible');
+      throw new InternalServerErrorException(
+        'Ubicacion de archivo no disponible',
+      );
     }
 
     if (/^https?:\/\//i.test(location)) {
+      this.assertAllowedRemoteUrl(location);
       const response = await fetch(location);
       if (!response.ok) {
-        throw new Error(`No se pudo descargar el archivo remoto (${response.status})`);
+        throw new Error(
+          `No se pudo descargar el archivo remoto (${response.status})`,
+        );
       }
 
       return Buffer.from(await response.arrayBuffer());
     }
 
-    return readFile(location);
+    return readFile(this.resolveLocalReadPath(location));
   }
 
-  private async uploadToLocal(input: UploadToStorageInput): Promise<StoredFile> {
+  private async uploadToLocal(
+    input: UploadToStorageInput,
+  ): Promise<StoredFile> {
     const extension = extname(input.originalName).toLowerCase();
     const safeBase = input.originalName
       .replace(extension, '')
@@ -102,8 +122,12 @@ export class StorageService {
 
     return {
       provider: 'local',
-      url: `/uploads/${input.folder}/${fileName}`,
-      fileUrl: `/uploads/${input.folder}/${fileName}`,
+      url: isSensitiveFolder(input.folder)
+        ? ''
+        : `/uploads/${input.folder}/${fileName}`,
+      fileUrl: isSensitiveFolder(input.folder)
+        ? ''
+        : `/uploads/${input.folder}/${fileName}`,
       key: absolutePath,
       resourceType: input.resourceType,
       fileName,
@@ -131,9 +155,9 @@ export class StorageService {
 
     return {
       provider: 'vercel-blob',
-      url: blob.url,
-      fileUrl: blob.url,
-      key: blob.pathname,
+      url: isSensitiveFolder(input.folder) ? '' : blob.url,
+      fileUrl: isSensitiveFolder(input.folder) ? '' : blob.url,
+      key: isSensitiveFolder(input.folder) ? blob.url : blob.pathname,
       resourceType: input.resourceType,
       fileName: input.originalName,
       mimeType: input.mimeType,
@@ -141,16 +165,101 @@ export class StorageService {
     };
   }
 
-  private async deleteFromVercelBlob(
-    pathname: string,
-    _resourceType: StorageResourceType,
-  ) {
+  private async deleteFromVercelBlob(pathname: string) {
     try {
       await del(pathname, { token: this.blobToken });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
       this.logger.warn(
-        `No se pudo eliminar blob remoto ${pathname}: ${error?.message || error}`,
+        `No se pudo eliminar blob remoto ${pathname}: ${message}`,
       );
     }
+  }
+
+  private resolveLocalReadPath(location: string) {
+    const normalizedLocation = location.replace(/\\/g, '/');
+    const uploadsRoot = resolve(process.cwd(), 'uploads');
+    const localLocation = normalizedLocation.startsWith('/uploads/')
+      ? join(process.cwd(), normalizedLocation.replace(/^\//, ''))
+      : location;
+
+    const resolvedLocation = resolve(localLocation);
+    const isInsideUploads =
+      resolvedLocation === uploadsRoot ||
+      resolvedLocation.startsWith(`${uploadsRoot}${sep}`);
+
+    if (!isInsideUploads) {
+      throw new InternalServerErrorException(
+        'Archivo fuera del almacenamiento permitido',
+      );
+    }
+
+    return resolvedLocation;
+  }
+
+  private assertAllowedRemoteUrl(location: string) {
+    const parsed = new URL(location);
+
+    if (parsed.protocol !== 'https:') {
+      throw new BadRequestException('URL remota de archivo no permitida');
+    }
+
+    if (this.isPrivateOrLocalHost(parsed.hostname)) {
+      throw new BadRequestException('Host privado de archivo no permitido');
+    }
+
+    const allowedHosts = this.getAllowedRemoteHosts();
+    const hostname = parsed.hostname.toLowerCase();
+    const allowed = [...allowedHosts].some(
+      (host) => hostname === host || hostname.endsWith(`.${host}`),
+    );
+
+    if (!allowed) {
+      throw new BadRequestException('Host remoto de archivo no permitido');
+    }
+  }
+
+  private getAllowedRemoteHosts() {
+    const hosts = new Set<string>();
+    const configuredHost =
+      this.configService.get<string>('STORAGE_ALLOWED_REMOTE_HOST') ||
+      process.env.STORAGE_ALLOWED_REMOTE_HOST ||
+      '';
+
+    configuredHost
+      .split(',')
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean)
+      .forEach((host) => hosts.add(host));
+
+    if (this.provider === 'vercel-blob') {
+      hosts.add('blob.vercel-storage.com');
+      hosts.add('public.blob.vercel-storage.com');
+      hosts.add('vercel-storage.com');
+    }
+
+    return hosts;
+  }
+
+  private isPrivateOrLocalHost(hostname: string) {
+    const host = hostname.toLowerCase();
+    if (host === 'localhost' || host.endsWith('.localhost')) return true;
+
+    const ipv4Match = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (!ipv4Match) return false;
+
+    const [, aRaw, bRaw] = ipv4Match;
+    const first = Number(aRaw);
+    const second = Number(bRaw);
+
+    return (
+      first === 10 ||
+      first === 127 ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168) ||
+      (first === 169 && second === 254) ||
+      first === 0
+    );
   }
 }

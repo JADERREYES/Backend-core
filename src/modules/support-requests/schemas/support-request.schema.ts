@@ -19,8 +19,13 @@ export class SupportRequest extends Document {
   })
   type: string;
 
-  @Prop({ type: String, enum: ['open', 'in_progress', 'resolved'], default: 'open' })
+  @Prop({
+    type: String,
+    enum: ['open', 'in_progress', 'resolved'],
+    default: 'open',
+  })
   status: string;
 }
 
-export const SupportRequestSchema = SchemaFactory.createForClass(SupportRequest);
+export const SupportRequestSchema =
+  SchemaFactory.createForClass(SupportRequest);

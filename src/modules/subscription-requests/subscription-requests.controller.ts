@@ -6,18 +6,26 @@ import {
   Param,
   Patch,
   Post,
-  Request,
+  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { extname } from 'path';
-import { SubscriptionRequestsService } from './subscription-requests.service';
+import {
+  SubscriptionRequestsService,
+  type SubscriptionRequestUploadFile,
+} from './subscription-requests.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../../common/decorators/current-user.decorator';
 import { CreateSubscriptionRequestDto } from './dto/create-subscription-request.dto';
 import { UpdateSubscriptionRequestStatusDto } from './dto/update-subscription-request-status.dto';
 import { UpdateSubscriptionRequestNotesDto } from './dto/update-subscription-request-notes.dto';
@@ -33,7 +41,11 @@ const ALLOWED_MIME_TYPES = [
 
 const proofUploadOptions = {
   storage: memoryStorage(),
-  fileFilter: (_req: any, file: any, cb: any) => {
+  fileFilter: (
+    _req: unknown,
+    file: SubscriptionRequestUploadFile,
+    cb: (error: Error | null, acceptFile: boolean) => void,
+  ) => {
     const extension = extname(file.originalname).toLowerCase();
     const validExtension = ALLOWED_EXTENSIONS.includes(extension);
     const validMime = ALLOWED_MIME_TYPES.includes(file.mimetype);
@@ -62,21 +74,24 @@ export class SubscriptionRequestsController {
   @Post()
   @UseInterceptors(FileInterceptor('proof', proofUploadOptions))
   async create(
-    @Request() req,
+    @CurrentUser() user: CurrentUserPayload,
     @Body() dto: CreateSubscriptionRequestDto,
-    @UploadedFile() file?: any,
+    @UploadedFile() file?: SubscriptionRequestUploadFile,
   ) {
-    return this.subscriptionRequestsService.create(req.user.userId, dto, file);
+    return this.subscriptionRequestsService.create(user.userId, dto, file);
   }
 
   @Get('me')
-  async findMine(@Request() req) {
-    return this.subscriptionRequestsService.findMine(req.user.userId);
+  async findMine(@CurrentUser() user: CurrentUserPayload) {
+    return this.subscriptionRequestsService.findMine(user.userId);
   }
 
   @Get('me/:id')
-  async findMineById(@Request() req, @Param('id') id: string) {
-    return this.subscriptionRequestsService.findMineById(req.user.userId, id);
+  async findMineById(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('id') id: string,
+  ) {
+    return this.subscriptionRequestsService.findMineById(user.userId, id);
   }
 }
 
@@ -98,31 +113,48 @@ export class AdminSubscriptionRequestsController {
     return this.subscriptionRequestsService.findByIdForAdmin(id);
   }
 
+  @Get(':id/proof/download')
+  async downloadProof(@Param('id') id: string, @Res() res: Response) {
+    const proof =
+      await this.subscriptionRequestsService.getProofFileForAdmin(id);
+
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', proof.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(proof.fileName)}"`,
+    );
+
+    return res.send(proof.buffer);
+  }
+
   @Patch(':id/status')
   async updateStatus(
     @Param('id') id: string,
-    @Request() req,
+    @CurrentUser() user: CurrentUserPayload,
     @Body() dto: UpdateSubscriptionRequestStatusDto,
   ) {
-    return this.subscriptionRequestsService.updateStatus(id, req.user.userId, dto);
+    return this.subscriptionRequestsService.updateStatus(id, user.userId, dto);
   }
 
   @Patch(':id/notes')
   async updateNotes(
     @Param('id') id: string,
-    @Request() req,
+    @CurrentUser() user: CurrentUserPayload,
     @Body() dto: UpdateSubscriptionRequestNotesDto,
   ) {
-    return this.subscriptionRequestsService.updateNotes(id, req.user.userId, dto);
+    return this.subscriptionRequestsService.updateNotes(id, user.userId, dto);
   }
 
   @Post(':id/activate')
   async activate(
     @Param('id') id: string,
-    @Request() req,
+    @CurrentUser() user: CurrentUserPayload,
     @Body() dto: ActivateSubscriptionRequestDto,
   ) {
-    return this.subscriptionRequestsService.activate(id, req.user.userId, dto);
+    return this.subscriptionRequestsService.activate(id, user.userId, dto);
   }
 }
 
@@ -135,7 +167,14 @@ export class AdminUserSubscriptionActivationController {
   ) {}
 
   @Post('activate-from-request/:requestId')
-  async activateFromRequest(@Param('requestId') requestId: string, @Request() req) {
-    return this.subscriptionRequestsService.activate(requestId, req.user.userId, {});
+  async activateFromRequest(
+    @Param('requestId') requestId: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.subscriptionRequestsService.activate(
+      requestId,
+      user.userId,
+      {},
+    );
   }
 }

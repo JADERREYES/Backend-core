@@ -7,12 +7,15 @@ import {
   Body,
   Param,
   UseGuards,
-  Request,
 } from '@nestjs/common';
 import { ChatsService } from './chats.service';
 import { CreateChatDto } from './dto/create-chat.dto';
 import { UpdateChatDto } from './dto/update-chat.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../../common/decorators/current-user.decorator';
 
 @Controller('chats')
 @UseGuards(JwtAuthGuard)
@@ -20,48 +23,53 @@ export class ChatsController {
   constructor(private readonly chatsService: ChatsService) {}
 
   @Post()
-  async create(@Request() req, @Body() createChatDto: CreateChatDto) {
-    const userId = req.user.userId;
-    return this.chatsService.create(userId, createChatDto);
+  async create(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() createChatDto: CreateChatDto,
+  ) {
+    return this.chatsService.create(user.userId, createChatDto);
   }
 
   @Get()
-  async findAll(@Request() req) {
-    const userId = req.user.userId;
-    return this.chatsService.findAllByUser(userId);
+  async findAll(@CurrentUser() user: CurrentUserPayload) {
+    return this.chatsService.findAllByUser(user.userId);
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string, @Request() req) {
-    const userId = req.user.userId;
-    return this.chatsService.findOne(id, userId);
+  async findOne(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.chatsService.findOne(id, user.userId);
   }
 
   @Put(':id')
   async update(
     @Param('id') id: string,
-    @Request() req,
+    @CurrentUser() user: CurrentUserPayload,
     @Body() updateChatDto: UpdateChatDto,
   ) {
-    const userId = req.user.userId;
-    return this.chatsService.update(id, userId, updateChatDto);
+    return this.chatsService.update(id, user.userId, updateChatDto);
   }
 
   @Put(':id/archive')
-  async archive(@Param('id') id: string, @Request() req) {
-    const userId = req.user.userId;
-    return this.chatsService.archive(id, userId);
+  async archive(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.chatsService.archive(id, user.userId);
   }
 
   @Put(':id/pin')
-  async pin(@Param('id') id: string, @Request() req) {
-    const userId = req.user.userId;
-    return this.chatsService.pin(id, userId);
+  async pin(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.chatsService.pin(id, user.userId);
   }
 
   @Delete(':id')
-  async delete(@Param('id') id: string, @Request() req) {
-    const userId = req.user.userId;
-    return this.chatsService.delete(id, userId);
+  async delete(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.chatsService.delete(id, user.userId);
   }
 }

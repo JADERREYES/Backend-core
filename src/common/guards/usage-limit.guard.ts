@@ -1,35 +1,50 @@
-import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+} from '@nestjs/common';
+import { Request } from 'express';
+
+type UsageLimitRequest = Request & {
+  user?: {
+    userId?: string;
+  };
+  remainingMessages?: number;
+};
 
 @Injectable()
 export class UsageLimitGuard implements CanActivate {
-  private dailyCounts: Map<string, { count: number; date: string }> = new Map();
+  private readonly dailyCounts = new Map<
+    string,
+    { count: number; date: string }
+  >();
 
   canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest();
+    const request = context.switchToHttp().getRequest<UsageLimitRequest>();
     const userId = request.user?.userId;
-    
+
     if (!userId) return true;
 
-    const DAILY_LIMIT = 5; // 5 mensajes por día para probar (cambia a 20 después)
+    const dailyLimit = 5;
     const today = new Date().toDateString();
-    
     let userStats = this.dailyCounts.get(userId);
-    
+
     if (!userStats || userStats.date !== today) {
       userStats = { count: 0, date: today };
       this.dailyCounts.set(userId, userStats);
     }
-    
-    console.log(`Usuario ${userId}: ${userStats.count}/${DAILY_LIMIT} mensajes hoy`);
-    
-    if (userStats.count >= DAILY_LIMIT) {
-      throw new ForbiddenException(`Has alcanzado el límite diario de ${DAILY_LIMIT} mensajes.`);
+
+    if (userStats.count >= dailyLimit) {
+      throw new ForbiddenException(
+        `Has alcanzado el limite diario de ${dailyLimit} mensajes.`,
+      );
     }
-    
-    userStats.count++;
+
+    userStats.count += 1;
     this.dailyCounts.set(userId, userStats);
-    request.remainingMessages = DAILY_LIMIT - userStats.count;
-    
+    request.remainingMessages = dailyLimit - userStats.count;
+
     return true;
   }
 }

@@ -38,7 +38,10 @@ export class ProfilesService {
     updateProfileDto: UpdateProfileDto,
   ): Promise<Profile | null> {
     const userIdObj = new Types.ObjectId(userId);
-    const existing = await this.profileModel.findOne({ userId: userIdObj }).lean().exec();
+    const existing = await this.profileModel
+      .findOne({ userId: userIdObj })
+      .lean()
+      .exec();
 
     const updatedProfile = await this.profileModel
       .findOneAndUpdate(
@@ -137,7 +140,9 @@ export class ProfilesService {
       (a, b) => b[1] - a[1],
     );
     const uniqueDays = new Set(
-      checkIns.map((entry) => new Date(entry.createdAt).toISOString().slice(0, 10)),
+      checkIns.map((entry) =>
+        new Date(entry.createdAt).toISOString().slice(0, 10),
+      ),
     );
 
     return {
@@ -161,7 +166,9 @@ export class ProfilesService {
                 ? `Volviste a tu espacio en ${uniqueDays.size} dias distintos.`
                 : 'Cada registro cuenta, incluso si fue un momento breve.',
             ]
-          : ['Aun no hay check-ins esta semana. Puedes empezar con un registro breve hoy.'],
+          : [
+              'Aun no hay check-ins esta semana. Puedes empezar con un registro breve hoy.',
+            ],
       recentCheckIns: checkIns.slice(0, 5),
     };
   }

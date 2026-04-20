@@ -5,7 +5,6 @@ import {
   Put,
   Body,
   UseGuards,
-  Request,
   UseInterceptors,
   UploadedFile,
   BadRequestException,
@@ -18,6 +17,25 @@ import { CreateCheckInDto } from './dto/create-checkin.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { StorageService } from '../../common/storage/storage.service';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../../common/decorators/current-user.decorator';
+
+type UploadedAvatarFile = {
+  buffer: Buffer;
+  originalname: string;
+  mimetype: string;
+  size: number;
+};
+
+type AvatarProfileUpdate = UpdateProfileDto & {
+  avatarStorageProvider?: string;
+  avatarStorageKey?: string;
+  avatarFileName?: string;
+  avatarMimeType?: string;
+  avatarSize?: number;
+};
 
 @Controller('profiles')
 @UseGuards(JwtAuthGuard)
@@ -29,47 +47,46 @@ export class ProfilesController {
 
   @Post()
   async createProfile(
-    @Request() req,
+    @CurrentUser() user: CurrentUserPayload,
     @Body() createProfileDto: CreateProfileDto,
   ) {
-    const userId = req.user.userId;
-    return this.profilesService.create(userId, createProfileDto);
+    return this.profilesService.create(user.userId, createProfileDto);
   }
 
   @Get('me')
-  async getMyProfile(@Request() req) {
-    const userId = req.user.userId;
-    return this.profilesService.findByUserId(userId);
+  async getMyProfile(@CurrentUser() user: CurrentUserPayload) {
+    return this.profilesService.findByUserId(user.userId);
   }
 
   @Put('me')
   async updateMyProfile(
-    @Request() req,
+    @CurrentUser() user: CurrentUserPayload,
     @Body() updateProfileDto: UpdateProfileDto,
   ) {
-    const userId = req.user.userId;
-    return this.profilesService.update(userId, updateProfileDto);
+    return this.profilesService.update(user.userId, updateProfileDto);
   }
 
   @Post('me/complete-onboarding')
-  async completeOnboarding(@Request() req) {
-    const userId = req.user.userId;
-    return this.profilesService.completeOnboarding(userId);
+  async completeOnboarding(@CurrentUser() user: CurrentUserPayload) {
+    return this.profilesService.completeOnboarding(user.userId);
   }
 
   @Get('me/check-ins')
-  async getCheckIns(@Request() req) {
-    return this.profilesService.getCheckIns(req.user.userId);
+  async getCheckIns(@CurrentUser() user: CurrentUserPayload) {
+    return this.profilesService.getCheckIns(user.userId);
   }
 
   @Post('me/check-ins')
-  async createCheckIn(@Request() req, @Body() dto: CreateCheckInDto) {
-    return this.profilesService.addCheckIn(req.user.userId, dto);
+  async createCheckIn(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: CreateCheckInDto,
+  ) {
+    return this.profilesService.addCheckIn(user.userId, dto);
   }
 
   @Get('me/weekly-summary')
-  async getWeeklySummary(@Request() req) {
-    return this.profilesService.getWeeklySummary(req.user.userId);
+  async getWeeklySummary(@CurrentUser() user: CurrentUserPayload) {
+    return this.profilesService.getWeeklySummary(user.userId);
   }
 
   @Post('me/avatar')
@@ -79,14 +96,22 @@ export class ProfilesController {
       fileFilter: (_req, file, cb) => {
         const allowed = ['image/png', 'image/jpeg', 'image/webp'];
         if (!allowed.includes(file.mimetype)) {
-          return cb(new BadRequestException('Solo se permiten imagenes PNG, JPG o WEBP'), false);
+          return cb(
+            new BadRequestException(
+              'Solo se permiten imagenes PNG, JPG o WEBP',
+            ),
+            false,
+          );
         }
         cb(null, true);
       },
       limits: { fileSize: 5 * 1024 * 1024 },
     }),
   )
-  async uploadAvatar(@Request() req, @UploadedFile() file?: any) {
+  async uploadAvatar(
+    @CurrentUser() user: CurrentUserPayload,
+    @UploadedFile() file?: UploadedAvatarFile,
+  ) {
     if (!file) {
       throw new BadRequestException('No se recibio ningun avatar');
     }
@@ -99,13 +124,15 @@ export class ProfilesController {
       resourceType: 'image',
     });
 
-    return this.profilesService.update(req.user.userId, {
+    const updatePayload: AvatarProfileUpdate = {
       avatarUrl: storedAvatar.fileUrl,
       avatarStorageProvider: storedAvatar.provider,
       avatarStorageKey: storedAvatar.key,
       avatarFileName: storedAvatar.fileName,
       avatarMimeType: storedAvatar.mimeType,
       avatarSize: storedAvatar.size,
-    } as any);
+    };
+
+    return this.profilesService.update(user.userId, updatePayload);
   }
 }

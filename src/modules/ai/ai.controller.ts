@@ -1,7 +1,11 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CreateChatSessionDto } from './dto/create-chat-session.dto';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../../common/decorators/current-user.decorator';
 
 const usageCounts = new Map<string, { count: number; date: string }>();
 
@@ -39,9 +43,11 @@ export class AiController {
   }
 
   @Post('chat')
-  async chat(@Body('message') message: string, @Req() req: any) {
-    const userId = req.user.userId;
-    const usage = this.validateDailyUsage(userId);
+  async chat(
+    @Body('message') message: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    const usage = this.validateDailyUsage(user.userId);
 
     if (!usage.allowed) {
       return {
@@ -66,9 +72,11 @@ export class AiController {
   }
 
   @Post('chat-session')
-  async chatSession(@Body() dto: CreateChatSessionDto, @Req() req: any) {
-    const userId = req.user.userId;
-    const usage = this.validateDailyUsage(userId);
+  async chatSession(
+    @Body() dto: CreateChatSessionDto,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    const usage = this.validateDailyUsage(user.userId);
 
     if (!usage.allowed) {
       return {
@@ -80,7 +88,7 @@ export class AiController {
     }
 
     const result = await this.aiService.generateConversationResponse(
-      userId,
+      user.userId,
       dto.message,
       dto.chatId,
       dto.title,

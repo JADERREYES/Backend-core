@@ -50,7 +50,10 @@ export class RemindersService {
 
   async remove(userId: string, id: string) {
     const result = await this.reminderModel
-      .deleteOne({ _id: new Types.ObjectId(id), userId: new Types.ObjectId(userId) })
+      .deleteOne({
+        _id: new Types.ObjectId(id),
+        userId: new Types.ObjectId(userId),
+      })
       .exec();
 
     if (result.deletedCount === 0) {

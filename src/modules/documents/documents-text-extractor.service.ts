@@ -9,13 +9,29 @@ type ExtractionResult = {
   error: string;
 };
 
+type LegacyPdfParser = (buffer: Buffer) => Promise<{ text?: string }>;
+type PdfParserInstance = {
+  getText: () => Promise<{ text?: string }>;
+  destroy: () => Promise<void> | void;
+};
+type PdfParserConstructor = new (input: { data: Buffer }) => PdfParserInstance;
+type PdfParseModule = {
+  default?: unknown;
+  PDFParse?: unknown;
+};
+
+const NULL_CHARACTER = String.fromCharCode(0);
+
 @Injectable()
 export class DocumentsTextExtractorService {
   private readonly logger = new Logger(DocumentsTextExtractorService.name);
 
   constructor(private readonly storageService: StorageService) {}
 
-  async extractFromFile(filePath: string, mimeType?: string): Promise<ExtractionResult> {
+  async extractFromFile(
+    filePath: string,
+    mimeType?: string,
+  ): Promise<ExtractionResult> {
     const fileBuffer = await this.storageService.read(filePath);
     const extension = extname(filePath).toLowerCase();
 
@@ -40,7 +56,8 @@ export class DocumentsTextExtractorService {
 
   normalizeText(text: string) {
     return text
-      .replace(/\u0000/g, ' ')
+      .split(NULL_CHARACTER)
+      .join(' ')
       .replace(/\r/g, '\n')
       .replace(/\n{3,}/g, '\n\n')
       .replace(/[ \t]{2,}/g, ' ')
@@ -55,14 +72,15 @@ export class DocumentsTextExtractorService {
         status: 'completed',
         error: '',
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = this.getErrorMessage(error);
       this.logger.warn(
-        `Fallo la extraccion DOCX para ${fileBuffer.length} bytes: ${error?.message || 'sin detalle'}`,
+        `Fallo la extraccion DOCX para ${fileBuffer.length} bytes: ${message}`,
       );
       return {
         text: '',
         status: 'failed',
-        error: error?.message || 'No se pudo extraer texto del archivo DOCX',
+        error: message || 'No se pudo extraer texto del archivo DOCX',
       };
     }
   }
@@ -71,34 +89,39 @@ export class DocumentsTextExtractorService {
     let parsePdfText: ((buffer: Buffer) => Promise<string>) | undefined;
 
     try {
-      const imported = require('pdf-parse');
-      const legacyParser =
-        typeof imported === 'function'
-          ? imported
-          : typeof imported?.default === 'function'
-            ? imported.default
-            : undefined;
+      const imported = (await import('pdf-parse')) as PdfParseModule;
+      const legacyParser = this.isLegacyPdfParser(imported)
+        ? imported
+        : this.isLegacyPdfParser(imported.default)
+          ? imported.default
+          : undefined;
 
       if (legacyParser) {
         parsePdfText = async (buffer) => {
           const parsed = await legacyParser(buffer);
           return this.normalizeText(parsed?.text || '');
         };
-      } else if (typeof imported?.PDFParse === 'function') {
+      } else if (this.isPdfParserConstructor(imported.PDFParse)) {
+        const PdfParse = imported.PDFParse;
         parsePdfText = async (buffer) => {
-          const parser = new imported.PDFParse({ data: buffer });
+          const parser = new PdfParse({ data: buffer });
 
           try {
             const parsed = await parser.getText();
             return this.normalizeText(parsed?.text || '');
           } finally {
-            await parser.destroy().catch(() => undefined);
+            try {
+              await Promise.resolve(parser.destroy());
+            } catch {
+              // Best-effort cleanup for parser resources.
+            }
           }
         };
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = this.getErrorMessage(error);
       this.logger.warn(
-        `pdf-parse no pudo cargarse en este runtime: ${error?.message || 'sin detalle'}`,
+        `pdf-parse no pudo cargarse en este runtime: ${message}`,
       );
       return {
         text: '',
@@ -124,9 +147,10 @@ export class DocumentsTextExtractorService {
         status: 'completed',
         error: '',
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = this.getErrorMessage(error);
       this.logger.warn(
-        `Fallo la extraccion PDF para ${fileBuffer.length} bytes: ${error?.message || 'sin detalle'}`,
+        `Fallo la extraccion PDF para ${fileBuffer.length} bytes: ${message}`,
       );
       return {
         text: '',
@@ -136,8 +160,8 @@ export class DocumentsTextExtractorService {
     }
   }
 
-  private buildPdfExtractionError(error: any) {
-    const message = String(error?.message || '').trim();
+  private buildPdfExtractionError(error: unknown) {
+    const message = this.getErrorMessage(error);
 
     if (!message) {
       return 'No se pudo extraer texto del PDF. El archivo queda subido con degradacion segura.';
@@ -152,5 +176,21 @@ export class DocumentsTextExtractorService {
     }
 
     return `No se pudo extraer texto del PDF. ${message}`;
+  }
+
+  private getErrorMessage(error: unknown) {
+    return error instanceof Error && error.message
+      ? error.message
+      : 'sin detalle';
+  }
+
+  private isLegacyPdfParser(value: unknown): value is LegacyPdfParser {
+    return typeof value === 'function';
+  }
+
+  private isPdfParserConstructor(
+    value: unknown,
+  ): value is PdfParserConstructor {
+    return typeof value === 'function';
   }
 }

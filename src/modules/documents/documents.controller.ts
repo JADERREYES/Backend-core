@@ -8,6 +8,7 @@ import {
   ParseFilePipe,
   Post,
   Put,
+  Query,
   Res,
   UploadedFile,
   UseGuards,
@@ -16,7 +17,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { extname } from 'path';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { DocumentsService } from './documents.service';
 import { DocumentsProcessingService } from './documents-processing.service';
 import { DocumentsRagService } from './documents-rag.service';
@@ -36,6 +37,32 @@ const ALLOWED_MIME_TYPES = [
 
 const ALLOWED_EXTENSIONS = ['.pdf', '.docx'];
 
+type MulterCallback = (error: Error | null, acceptFile: boolean) => void;
+type UploadedDocumentFile = {
+  buffer: Buffer;
+  originalname: string;
+  mimetype: string;
+  size: number;
+  filename?: string;
+};
+
+const validateDocumentUpload = (
+  _req: Request,
+  file: UploadedDocumentFile,
+  cb: MulterCallback,
+) => {
+  const extension = extname(file.originalname).toLowerCase();
+  const validMime = ALLOWED_MIME_TYPES.includes(file.mimetype);
+  const validExtension = ALLOWED_EXTENSIONS.includes(extension);
+
+  if (!validMime || !validExtension) {
+    cb(new BadRequestException('Solo se permiten archivos PDF y DOCX'), false);
+    return;
+  }
+
+  cb(null, true);
+};
+
 @Controller('documents')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('superadmin')
@@ -48,13 +75,36 @@ export class DocumentsController {
   ) {}
 
   @Get()
-  async findAll() {
-    return this.documentsService.findAll();
+  async findAll(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('category') category?: string,
+  ) {
+    return this.documentsService.findAllPaginated({
+      page,
+      limit,
+      search,
+      status,
+      category,
+    });
   }
 
-  @Get(':id')
-  async findOne(@Param('id') id: string) {
-    return this.documentsService.findOne(id);
+  @Get('rag/health')
+  async getRagHealth() {
+    return this.documentsRagService.getHealth();
+  }
+
+  @Get('rag/search')
+  async searchRag(
+    @Query('query') query: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.documentsRagService.retrieveRelevantContext(
+      query || '',
+      Math.min(Math.max(Number(limit) || 5, 1), 10),
+    );
   }
 
   @Get(':id/extracted-text')
@@ -75,19 +125,34 @@ export class DocumentsController {
 
   @Get(':id/download')
   async download(@Param('id') id: string, @Res() res: Response) {
-    const document = await this.documentsService.findOne(id);
+    const document = await this.documentsService.findFileForDownload(id);
+    const fileLocation = document.fileLocation;
 
-    const fileUrl = document.fileUrl || document.storagePath;
-
-    if (!fileUrl) {
+    if (!fileLocation) {
       return res.status(404).json({ message: 'Documento sin archivo adjunto' });
     }
 
-    if (/^https?:\/\//i.test(fileUrl)) {
-      return res.redirect(fileUrl);
+    const fileBuffer = await this.storageService.read(fileLocation);
+    const fileName = document.fileName;
+
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(fileName)}"`,
+    );
+
+    if (document.mimeType) {
+      res.setHeader('Content-Type', document.mimeType);
     }
 
-    return res.download(fileUrl, document.originalFileName || 'documento');
+    return res.send(fileBuffer);
+  }
+
+  @Get(':id')
+  async findOne(@Param('id') id: string) {
+    return this.documentsService.findOne(id);
   }
 
   @Post(':id/reindex')
@@ -109,20 +174,7 @@ export class DocumentsController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
-      fileFilter: (_req, file, cb) => {
-        const extension = extname(file.originalname).toLowerCase();
-        const validMime = ALLOWED_MIME_TYPES.includes(file.mimetype);
-        const validExtension = ALLOWED_EXTENSIONS.includes(extension);
-
-        if (!validMime || !validExtension) {
-          return cb(
-            new BadRequestException('Solo se permiten archivos PDF y DOCX') as any,
-            false,
-          );
-        }
-
-        cb(null, true);
-      },
+      fileFilter: validateDocumentUpload,
       limits: { fileSize: 15 * 1024 * 1024 },
     }),
   )
@@ -132,7 +184,7 @@ export class DocumentsController {
         fileIsRequired: true,
       }),
     )
-    file: any,
+    file: UploadedDocumentFile,
     @Body() payload: UploadDocumentDto,
   ) {
     const storedFile = await this.storageService.upload({
@@ -171,20 +223,7 @@ export class DocumentsController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
-      fileFilter: (_req, file, cb) => {
-        const extension = extname(file.originalname).toLowerCase();
-        const validMime = ALLOWED_MIME_TYPES.includes(file.mimetype);
-        const validExtension = ALLOWED_EXTENSIONS.includes(extension);
-
-        if (!validMime || !validExtension) {
-          return cb(
-            new BadRequestException('Solo se permiten archivos PDF y DOCX') as any,
-            false,
-          );
-        }
-
-        cb(null, true);
-      },
+      fileFilter: validateDocumentUpload,
       limits: { fileSize: 15 * 1024 * 1024 },
     }),
   )
@@ -195,7 +234,7 @@ export class DocumentsController {
         fileIsRequired: true,
       }),
     )
-    file: any,
+    file: UploadedDocumentFile,
     @Body() payload: UploadDocumentDto,
   ) {
     const storedFile = await this.storageService.upload({

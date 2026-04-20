@@ -6,7 +6,7 @@ import {
   Patch,
   Post,
   Put,
-  Request,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { SubscriptionsService } from './subscriptions.service';
@@ -15,6 +15,10 @@ import { UpdateSubscriptionDto } from './dto/update-subscription.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../../common/decorators/current-user.decorator';
 
 @Controller('subscriptions')
 @UseGuards(JwtAuthGuard)
@@ -23,41 +27,50 @@ export class SubscriptionsController {
 
   @Post()
   async createSubscription(
-    @Request() req,
+    @CurrentUser() user: CurrentUserPayload,
     @Body() createSubscriptionDto: CreateSubscriptionDto,
   ) {
-    const userId = req.user.userId;
-    return this.subscriptionsService.create(userId, createSubscriptionDto);
+    return this.subscriptionsService.create(user.userId, createSubscriptionDto);
   }
 
   @Get('me')
-  async getMySubscription(@Request() req) {
-    return this.subscriptionsService.findByUserId(req.user.userId);
+  async getMySubscription(@CurrentUser() user: CurrentUserPayload) {
+    return this.subscriptionsService.findByUserId(user.userId);
   }
 
   @Put('me')
   async updateMySubscription(
-    @Request() req,
+    @CurrentUser() user: CurrentUserPayload,
     @Body() updateSubscriptionDto: UpdateSubscriptionDto,
   ) {
-    return this.subscriptionsService.update(req.user.userId, updateSubscriptionDto);
+    return this.subscriptionsService.update(user.userId, updateSubscriptionDto);
   }
 
   @Get('me/usage')
-  async getMyUsage(@Request() req) {
-    return this.subscriptionsService.getUsage(req.user.userId);
+  async getMyUsage(@CurrentUser() user: CurrentUserPayload) {
+    return this.subscriptionsService.getUsage(user.userId);
   }
 
   @Get('me/history')
-  async getMyActivationHistory(@Request() req) {
-    return this.subscriptionsService.getActivationHistoryForUser(req.user.userId);
+  async getMyActivationHistory(@CurrentUser() user: CurrentUserPayload) {
+    return this.subscriptionsService.getActivationHistoryForUser(user.userId);
   }
 
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('superadmin')
-  async findAll() {
-    return this.subscriptionsService.findAllForAdmin();
+  async findAll(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.subscriptionsService.findAllForAdminPaginated({
+      page,
+      limit,
+      search,
+      status,
+    });
   }
 
   @Put(':id')
@@ -85,13 +98,23 @@ export class AdminUserSubscriptionsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}
 
   @Get()
-  async findAll() {
-    return this.subscriptionsService.findAllForAdmin();
+  async findAll(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.subscriptionsService.findAllForAdminPaginated({
+      page,
+      limit,
+      search,
+      status,
+    });
   }
 
-  @Get(':userId')
-  async findByUserId(@Param('userId') userId: string) {
-    return this.subscriptionsService.findByUserIdForAdmin(userId);
+  @Get(':id')
+  async findByUserOrSubscriptionId(@Param('id') id: string) {
+    return this.subscriptionsService.findByUserOrSubscriptionIdForAdmin(id);
   }
 
   @Patch(':id')

@@ -1,8 +1,20 @@
-import { Controller, Post, Body, Get, UseGuards, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../../common/decorators/current-user.decorator';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { RequestEmailChangeDto } from './dto/request-email-change.dto';
+import { ConfirmEmailChangeDto } from './dto/confirm-email-change.dto';
+import {
+  ConfirmTwoFactorDto,
+  DisableTwoFactorDto,
+  RequestTwoFactorDto,
+} from './dto/two-factor.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -20,8 +32,67 @@ export class AuthController {
 
   @Get('profile')
   @UseGuards(JwtAuthGuard)
-  async getProfile(@Req() req: any) {
-    const userId = req.user.userId;
-    return this.authService.getProfile(userId);
+  async getProfile(@CurrentUser() user: CurrentUserPayload) {
+    return this.authService.getProfile(user.userId);
+  }
+
+  @Post('change-password')
+  @UseGuards(JwtAuthGuard)
+  async changePassword(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(user.userId, dto);
+  }
+
+  @Post('email-change/request')
+  @UseGuards(JwtAuthGuard)
+  async requestEmailChange(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: RequestEmailChangeDto,
+  ) {
+    return this.authService.requestEmailChange(user.userId, dto);
+  }
+
+  @Post('email-change/confirm')
+  @UseGuards(JwtAuthGuard)
+  async confirmEmailChange(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: ConfirmEmailChangeDto,
+  ) {
+    return this.authService.confirmEmailChange(user.userId, dto);
+  }
+
+  @Post('2fa/request')
+  @UseGuards(JwtAuthGuard)
+  async requestTwoFactor(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: RequestTwoFactorDto,
+  ) {
+    return this.authService.requestTwoFactorSetup(user.userId, dto);
+  }
+
+  @Post('2fa/confirm')
+  @UseGuards(JwtAuthGuard)
+  async confirmTwoFactor(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: ConfirmTwoFactorDto,
+  ) {
+    return this.authService.confirmTwoFactorSetup(user.userId, dto);
+  }
+
+  @Post('2fa/disable')
+  @UseGuards(JwtAuthGuard)
+  async disableTwoFactor(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: DisableTwoFactorDto,
+  ) {
+    return this.authService.disableTwoFactor(user.userId, dto);
+  }
+
+  @Delete('account')
+  @UseGuards(JwtAuthGuard)
+  async deleteAccount(@CurrentUser() user: CurrentUserPayload) {
+    return this.authService.deleteAccount(user.userId);
   }
 }

@@ -2,6 +2,7 @@ import { IsIn } from 'class-validator';
 
 export class UpdateSubscriptionRequestStatusDto {
   @IsIn([
+    'pending',
     'submitted',
     'new',
     'receipt_uploaded',
@@ -15,6 +16,7 @@ export class UpdateSubscriptionRequestStatusDto {
     'activated',
   ])
   status:
+    | 'pending'
     | 'submitted'
     | 'new'
     | 'receipt_uploaded'

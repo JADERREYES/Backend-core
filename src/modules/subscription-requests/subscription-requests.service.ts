@@ -16,6 +16,36 @@ import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { ActivateSubscriptionRequestDto } from './dto/activate-subscription-request.dto';
 import { StorageService } from '../../common/storage/storage.service';
 
+export type SubscriptionRequestProofFile = {
+  buffer: Buffer;
+  fileName: string;
+  mimeType: string;
+};
+
+export type SubscriptionRequestUploadFile = {
+  buffer: Buffer;
+  originalname: string;
+  mimetype: string;
+  size: number;
+};
+
+type SerializableSubscriptionRequest = {
+  toObject?: () => Record<string, unknown>;
+};
+
+const PENDING_SUBSCRIPTION_REQUEST_STATUSES = [
+  'pending',
+  'new',
+  'receipt_uploaded',
+  'submitted',
+  'under_review',
+  'contacted',
+  'pending_payment',
+  'paid',
+  'awaiting_validation',
+  'approved',
+] as const;
+
 @Injectable()
 export class SubscriptionRequestsService {
   constructor(
@@ -29,7 +59,11 @@ export class SubscriptionRequestsService {
     private readonly storageService: StorageService,
   ) {}
 
-  async create(userId: string, dto: CreateSubscriptionRequestDto, file?: any) {
+  async create(
+    userId: string,
+    dto: CreateSubscriptionRequestDto,
+    file?: SubscriptionRequestUploadFile,
+  ) {
     const userObjectId = new Types.ObjectId(userId);
     const [user, currentSubscription] = await Promise.all([
       this.userModel.findById(userObjectId).lean().exec(),
@@ -38,6 +72,20 @@ export class SubscriptionRequestsService {
 
     if (!user) {
       throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const existingPendingRequest = await this.subscriptionRequestModel
+      .findOne({
+        userId: userObjectId,
+        status: { $in: [...PENDING_SUBSCRIPTION_REQUEST_STATUSES] },
+      })
+      .lean()
+      .exec();
+
+    if (existingPendingRequest) {
+      throw new BadRequestException(
+        'Ya tienes una solicitud pendiente. Espera la revision del equipo.',
+      );
     }
 
     const [plan, paymentMethod] = await Promise.all([
@@ -50,28 +98,38 @@ export class SubscriptionRequestsService {
     }
 
     if (!paymentMethod.isActive) {
-      throw new BadRequestException('El metodo de pago seleccionado no esta activo');
+      throw new BadRequestException(
+        'El metodo de pago seleccionado no esta activo',
+      );
     }
 
     if (plan.category === 'free') {
-      throw new BadRequestException('No se puede solicitar el plan free por pago manual');
+      throw new BadRequestException(
+        'No se puede solicitar el plan free por pago manual',
+      );
     }
 
     if (plan.category === 'trial') {
-      throw new BadRequestException('El plan trial no se solicita por pago manual');
+      throw new BadRequestException(
+        'El plan trial no se solicita por pago manual',
+      );
     }
 
-    const uploadedProof = file
-      ? await this.storageService.upload({
-          buffer: file.buffer,
-          originalName: file.originalname,
-          mimeType: file.mimetype,
-          folder: 'subscription-proofs',
-          resourceType: file.mimetype?.startsWith('image/') ? 'image' : 'raw',
-        })
-      : null;
+    if (!file) {
+      throw new BadRequestException(
+        'Debes adjuntar el comprobante de pago para enviar la solicitud',
+      );
+    }
 
-    return this.subscriptionRequestModel.create({
+    const uploadedProof = await this.storageService.upload({
+      buffer: file.buffer,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      folder: 'subscription-proofs',
+      resourceType: file.mimetype?.startsWith('image/') ? 'image' : 'raw',
+    });
+
+    const created = await this.subscriptionRequestModel.create({
       userId: userObjectId,
       userName: user.name || user.email.split('@')[0],
       userEmail: user.email,
@@ -100,35 +158,40 @@ export class SubscriptionRequestsService {
         accountLabel: paymentMethod.accountLabel || 'Numero de pago',
         accountValue:
           paymentMethod.accountValue || paymentMethod.accountNumber || '',
-        holderName: paymentMethod.holderName || paymentMethod.accountHolder || '',
+        holderName:
+          paymentMethod.holderName || paymentMethod.accountHolder || '',
         accountNumber: paymentMethod.accountNumber,
         instructions: paymentMethod.instructions,
       },
       payerName: dto.payerName?.trim() || '',
       payerPhone: dto.payerPhone?.trim() || '',
-      reportedAmount: Number(dto.reportedAmount || 0),
+      reportedAmount: Number(plan.price || 0),
       paidAtReference: dto.paidAtReference?.trim() || '',
       message: dto.message?.trim() || '',
-      proofUrl: uploadedProof?.fileUrl || '',
-      proofStorageProvider: uploadedProof?.provider || '',
-      proofStorageKey: uploadedProof?.key || '',
-      proofFileUrl: uploadedProof?.fileUrl || '',
-      receiptUrl: uploadedProof?.fileUrl || '',
-      proofOriginalName: file?.originalname || '',
-      receiptFileName: uploadedProof?.fileName || file?.originalname || '',
-      proofMimeType: uploadedProof?.mimeType || file?.mimetype || '',
-      proofSize: uploadedProof?.size || file?.size || 0,
-      status: file ? 'receipt_uploaded' : 'submitted',
+      proofUrl: uploadedProof.fileUrl || '',
+      proofStorageProvider: uploadedProof.provider || '',
+      proofStorageKey: uploadedProof.key || '',
+      proofFileUrl: uploadedProof.fileUrl || '',
+      receiptUrl: uploadedProof.fileUrl || '',
+      proofOriginalName: file.originalname || '',
+      receiptFileName: uploadedProof.fileName || file.originalname || '',
+      proofMimeType: uploadedProof.mimeType || file.mimetype || '',
+      proofSize: uploadedProof.size || file.size || 0,
+      status: 'pending',
       adminNotes: '',
     });
+
+    return this.serializeRequest(created);
   }
 
   async findMine(userId: string) {
-    return this.subscriptionRequestModel
+    const items = await this.subscriptionRequestModel
       .find({ userId: new Types.ObjectId(userId) })
       .sort({ createdAt: -1 })
       .lean()
       .exec();
+
+    return items.map((item) => this.serializeRequest(item));
   }
 
   async findMineById(userId: string, id: string) {
@@ -141,15 +204,17 @@ export class SubscriptionRequestsService {
       throw new NotFoundException('Solicitud no encontrada');
     }
 
-    return item;
+    return this.serializeRequest(item);
   }
 
   async findAllForAdmin() {
-    return this.subscriptionRequestModel
+    const items = await this.subscriptionRequestModel
       .find()
       .sort({ createdAt: -1 })
       .lean()
       .exec();
+
+    return items.map((item) => this.serializeRequest(item, true));
   }
 
   async findByIdForAdmin(id: string) {
@@ -159,7 +224,34 @@ export class SubscriptionRequestsService {
       throw new NotFoundException('Solicitud no encontrada');
     }
 
-    return item;
+    return this.serializeRequest(item, true);
+  }
+
+  async getProofFileForAdmin(
+    id: string,
+  ): Promise<SubscriptionRequestProofFile> {
+    const item = await this.subscriptionRequestModel.findById(id).lean().exec();
+
+    if (!item) {
+      throw new NotFoundException('Solicitud no encontrada');
+    }
+
+    const location =
+      item.proofStorageKey ||
+      item.proofFileUrl ||
+      item.proofUrl ||
+      item.receiptUrl;
+
+    if (!location) {
+      throw new NotFoundException('Comprobante no encontrado');
+    }
+
+    return {
+      buffer: await this.storageService.read(location),
+      fileName:
+        item.proofOriginalName || item.receiptFileName || `comprobante-${id}`,
+      mimeType: item.proofMimeType || 'application/octet-stream',
+    };
   }
 
   async updateStatus(
@@ -190,7 +282,7 @@ export class SubscriptionRequestsService {
       throw new NotFoundException('Solicitud no encontrada');
     }
 
-    return updated;
+    return this.serializeRequest(updated);
   }
 
   async updateNotes(
@@ -217,7 +309,7 @@ export class SubscriptionRequestsService {
       throw new NotFoundException('Solicitud no encontrada');
     }
 
-    return updated;
+    return this.serializeRequest(updated);
   }
 
   async activate(
@@ -225,14 +317,19 @@ export class SubscriptionRequestsService {
     adminUserId: string,
     dto: ActivateSubscriptionRequestDto,
   ) {
-    const request = await this.subscriptionRequestModel.findById(id).lean().exec();
+    const request = await this.subscriptionRequestModel
+      .findById(id)
+      .lean()
+      .exec();
 
     if (!request) {
       throw new NotFoundException('Solicitud no encontrada');
     }
 
     if (request.status === 'rejected') {
-      throw new BadRequestException('No se puede activar una solicitud rechazada');
+      throw new BadRequestException(
+        'No se puede activar una solicitud rechazada',
+      );
     }
 
     const previousSubscription = await this.subscriptionsService.findByUserId(
@@ -269,9 +366,13 @@ export class SubscriptionRequestsService {
             reviewedAt: new Date(),
             activatedSubscriptionId: subscription._id,
             currentPlanCode:
-              request.currentPlanCode || previousSubscription.planCode || 'free',
+              request.currentPlanCode ||
+              previousSubscription.planCode ||
+              'free',
             currentPlanName:
-              request.currentPlanName || previousSubscription.planName || 'Free',
+              request.currentPlanName ||
+              previousSubscription.planName ||
+              'Free',
             activatedPlanId: subscription.planId || null,
             activatedPlanName: subscription.planName || request.planName,
             activatedPlanCode: subscription.planCode || request.planCode,
@@ -298,8 +399,37 @@ export class SubscriptionRequestsService {
       .exec();
 
     return {
-      request: updated,
+      request: this.serializeRequest(updated),
       subscription,
+    };
+  }
+
+  private serializeRequest(
+    item: SerializableSubscriptionRequest | Record<string, unknown> | null,
+    includeProofAvailability = false,
+  ) {
+    if (!item) return item;
+
+    const source =
+      typeof item.toObject === 'function' ? item.toObject() : { ...item };
+    const hasProof = Boolean(
+      source.proofOriginalName ||
+      source.receiptFileName ||
+      Number(source.proofSize || 0) > 0,
+    );
+
+    delete source.proofStorageKey;
+
+    const proofDownloadPath = hasProof
+      ? `/admin/subscription-requests/${String(source._id)}/proof/download`
+      : '';
+
+    return {
+      ...source,
+      proofUrl: includeProofAvailability ? proofDownloadPath : '',
+      proofFileUrl: includeProofAvailability ? proofDownloadPath : '',
+      receiptUrl: includeProofAvailability ? proofDownloadPath : '',
+      hasProof,
     };
   }
 }

@@ -2,6 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { NextFunction, Request, Response } from 'express';
 import { join } from 'path';
 import { AppModule } from './app.module';
 
@@ -37,13 +38,48 @@ function isAllowedVercelPreview(origin: string) {
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
+  const isProduction = configService.get<string>('NODE_ENV') === 'production';
 
-  const defaultOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:5173',
-    'http://localhost:5174',
-  ].map(normalizeOrigin);
+  app.set('trust proxy', 1);
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader(
+      'Permissions-Policy',
+      'camera=(), microphone=(), geolocation=()',
+    );
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+
+    if (isProduction) {
+      res.setHeader(
+        'Strict-Transport-Security',
+        'max-age=31536000; includeSubDomains',
+      );
+    }
+
+    next();
+  });
+
+  if (configService.get<string>('ENFORCE_HTTPS') === 'true') {
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const forwardedProto = req.headers['x-forwarded-proto'];
+      if (forwardedProto && forwardedProto !== 'https') {
+        res.redirect(308, `https://${req.headers.host}${req.originalUrl}`);
+        return;
+      }
+      next();
+    });
+  }
+
+  const defaultOrigins = isProduction
+    ? []
+    : [
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:5173',
+        'http://localhost:5174',
+      ].map(normalizeOrigin);
 
   const configuredOrigins = (configService.get<string>('CORS_ORIGINS') || '')
     .split(/[,\n]/)
@@ -89,18 +125,22 @@ async function bootstrap() {
     }),
   );
 
-  const storageProvider = configService.get<string>('STORAGE_PROVIDER') || 'local';
+  const storageProvider =
+    configService.get<string>('STORAGE_PROVIDER') || 'local';
+  const publicUploadsEnabled =
+    !isProduction ||
+    configService.get<string>('ENABLE_PUBLIC_UPLOADS') === 'true';
 
-  if (storageProvider === 'local') {
-    app.useStaticAssets(join(process.cwd(), 'uploads'), {
-      prefix: '/uploads/',
+  if (storageProvider === 'local' && publicUploadsEnabled) {
+    app.useStaticAssets(join(process.cwd(), 'uploads', 'avatars'), {
+      prefix: '/uploads/avatars/',
     });
   }
 
   const port = configService.get<number>('PORT') || 3000;
 
   await app.listen(port);
-  console.log(`🚀 Backend corriendo en http://localhost:${port}`);
+  console.log(`Backend running on http://localhost:${port}`);
 }
 
 void bootstrap();

@@ -32,6 +32,18 @@ export class Alert extends Document {
 
   @Prop()
   assignedTo?: string;
+
+  @Prop()
+  relatedUserId?: string;
+
+  @Prop()
+  relatedChatId?: string;
+
+  @Prop({ type: Date, default: null })
+  responseSentAt?: Date | null;
+
+  @Prop()
+  responseMessageId?: string;
 }
 
 export const AlertSchema = SchemaFactory.createForClass(Alert);

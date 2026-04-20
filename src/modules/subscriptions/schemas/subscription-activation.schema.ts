@@ -58,5 +58,6 @@ export class SubscriptionActivation extends Document {
   adminNotes: string;
 }
 
-export const SubscriptionActivationSchema =
-  SchemaFactory.createForClass(SubscriptionActivation);
+export const SubscriptionActivationSchema = SchemaFactory.createForClass(
+  SubscriptionActivation,
+);

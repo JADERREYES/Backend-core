@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsIn } from 'class-validator';
+import { IsString, IsNotEmpty, IsIn, IsObject, IsOptional } from 'class-validator';
 
 export class CreateMessageDto {
   @IsNotEmpty()
@@ -7,7 +7,7 @@ export class CreateMessageDto {
 
   @IsNotEmpty()
   @IsString()
-  senderId: string;  // ← USAR senderId
+  senderId: string; // ← USAR senderId
 
   @IsNotEmpty()
   @IsString()
@@ -17,4 +17,8 @@ export class CreateMessageDto {
   @IsNotEmpty()
   @IsString()
   content: string;
+
+  @IsOptional()
+  @IsObject()
+  metadata?: Record<string, unknown>;
 }

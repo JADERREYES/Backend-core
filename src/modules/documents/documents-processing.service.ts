@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import IORedis from 'ioredis';
@@ -19,17 +20,20 @@ const DOCUMENTS_QUEUE_NAME = 'documents-processing';
 @Injectable()
 export class DocumentsProcessingService implements OnModuleDestroy {
   private readonly logger = new Logger(DocumentsProcessingService.name);
-  private readonly redisUrl = process.env.REDIS_URL;
+  private readonly redisUrl: string;
   private readonly queue?: Queue<ProcessingJobData>;
   private readonly worker?: Worker<ProcessingJobData>;
   private readonly redisConnection?: IORedis;
 
   constructor(
+    private readonly configService: ConfigService,
     @InjectModel(AdminDocument.name)
     private readonly documentModel: Model<AdminDocument>,
     private readonly documentsRagService: DocumentsRagService,
     private readonly extractorService: DocumentsTextExtractorService,
   ) {
+    this.redisUrl = this.configService.get<string>('REDIS_URL') || '';
+
     if (this.redisUrl) {
       this.redisConnection = new IORedis(this.redisUrl, {
         maxRetriesPerRequest: null,
@@ -91,7 +95,10 @@ export class DocumentsProcessingService implements OnModuleDestroy {
   }
 
   async processDocument(documentId: string, mode: ProcessingMode = 'full') {
-    const document = await this.documentModel.findById(documentId).lean().exec();
+    const document = await this.documentModel
+      .findById(documentId)
+      .lean()
+      .exec();
     if (!document) {
       throw new Error('Documento no encontrado');
     }
@@ -113,7 +120,8 @@ export class DocumentsProcessingService implements OnModuleDestroy {
       let extractionError = '';
       let processingError = '';
 
-      const fileLocation = document.fileUrl || document.storagePath;
+      const fileLocation =
+        document.storageKey || document.storagePath || document.fileUrl;
 
       if (mode === 'full' && document.sourceType === 'file' && fileLocation) {
         extractionStatus = 'processing';
@@ -131,9 +139,12 @@ export class DocumentsProcessingService implements OnModuleDestroy {
         extractedText = extractionResult.text;
         extractionStatus = extractionResult.status;
         extractionError = extractionResult.error;
-        processingError = extractionResult.status === 'failed' ? extractionResult.error : '';
+        processingError =
+          extractionResult.status === 'failed' ? extractionResult.error : '';
       } else if (mode === 'full' && document.sourceType === 'manual') {
-        extractedText = this.extractorService.normalizeText(document.content || '');
+        extractedText = this.extractorService.normalizeText(
+          document.content || '',
+        );
         extractionStatus = 'not_required';
       }
 

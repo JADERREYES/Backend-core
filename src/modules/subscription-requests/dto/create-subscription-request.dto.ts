@@ -32,8 +32,9 @@ export class CreateSubscriptionRequestDto {
   @MaxLength(40)
   payerPhone: string;
 
+  @IsOptional()
   @IsNumberString()
-  reportedAmount: string;
+  reportedAmount?: string;
 
   @IsOptional()
   @IsString()

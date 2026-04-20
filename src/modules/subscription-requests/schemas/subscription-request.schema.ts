@@ -143,6 +143,7 @@ export class SubscriptionRequest extends Document {
   @Prop({
     type: String,
     enum: [
+      'pending',
       'submitted',
       'new',
       'receipt_uploaded',
@@ -155,7 +156,7 @@ export class SubscriptionRequest extends Document {
       'rejected',
       'activated',
     ],
-    default: 'submitted',
+    default: 'pending',
   })
   status: string;
 

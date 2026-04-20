@@ -67,7 +67,7 @@ export class ChatsService {
   }
 
   async archive(chatId: string, userId: string): Promise<Chat | null> {
-    return this.update(chatId, userId, { status: ChatStatus.ARCHIVED } as any);
+    return this.update(chatId, userId, { status: ChatStatus.ARCHIVED });
   }
 
   async pin(chatId: string, userId: string): Promise<Chat | null> {

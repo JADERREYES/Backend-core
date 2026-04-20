@@ -1,9 +1,6 @@
 export type StorageResourceType = 'image' | 'raw';
 
-export type UploadFolder =
-  | 'documents'
-  | 'subscription-proofs'
-  | 'avatars';
+export type UploadFolder = 'documents' | 'subscription-proofs' | 'avatars';
 
 export type UploadToStorageInput = {
   buffer: Buffer;

@@ -7,6 +7,78 @@ import { UpdateSubscriptionDto } from './dto/update-subscription.dto';
 import { User } from '../users/schemas/user.schema';
 import { PlansService } from '../plans/plans.service';
 import { SubscriptionActivation } from './schemas/subscription-activation.schema';
+import {
+  buildPaginatedResult,
+  normalizePagination,
+} from '../../common/pagination';
+
+type AdminSubscriptionListQuery = {
+  page?: string | number;
+  limit?: string | number;
+  search?: string;
+  status?: string;
+};
+
+type SubscriptionLimits = {
+  maxChatsPerMonth: number;
+  maxMessagesPerMonth: number;
+  maxDocumentsMB: number;
+  monthlyTokens: number;
+  extraTokens: number;
+  dailyMessageLimit?: number;
+};
+
+type SubscriptionUsage = {
+  chatsUsed: number;
+  messagesUsed: number;
+  documentsUsedMB: number;
+  tokensUsed: number;
+};
+
+type LeanSubscription = {
+  _id: Types.ObjectId;
+  userId: Types.ObjectId;
+  planId?: Types.ObjectId | null;
+  planName: string;
+  planCode: string;
+  planCategory: string;
+  status: string;
+  amount: number;
+  currency: string;
+  limits?: Partial<SubscriptionLimits>;
+  currentUsage?: Partial<SubscriptionUsage>;
+  startDate?: Date | string;
+  startedAt?: Date | string;
+  endDate?: Date | string;
+  expiresAt?: Date | string;
+  autoRenew?: boolean;
+  sourceRequestId?: Types.ObjectId | null;
+  tokenLimit?: number;
+  tokensRemaining?: number;
+  dailyMessageLimit?: number;
+  monthlyMessageLimit?: number;
+  notes?: string;
+};
+
+type AdminUserSummary = {
+  _id: Types.ObjectId;
+  email?: string;
+  name?: string;
+};
+
+const getModelId = (item: { id?: unknown; _id?: unknown }) => {
+  const rawId = item.id ?? item._id;
+
+  if (rawId instanceof Types.ObjectId) {
+    return rawId.toString();
+  }
+
+  if (typeof rawId === 'string' || typeof rawId === 'number') {
+    return String(rawId);
+  }
+
+  throw new NotFoundException('Identificador de plan no disponible');
+};
 
 const DEFAULT_LIMITS = {
   maxChatsPerMonth: 10,
@@ -45,6 +117,7 @@ export class SubscriptionsService {
 
     if (!subscription) {
       const defaultPlan = await this.plansService.ensureDefaultFreePlan();
+      const defaultPlanId = new Types.ObjectId(getModelId(defaultPlan));
       const startDate = new Date();
       const endDate = new Date(
         startDate.getTime() + defaultPlan.durationDays * 24 * 60 * 60 * 1000,
@@ -52,7 +125,7 @@ export class SubscriptionsService {
 
       const created = await this.subscriptionModel.create({
         userId: userIdObj,
-        planId: defaultPlan._id,
+        planId: defaultPlanId,
         planName: defaultPlan.name,
         planCode: defaultPlan.code,
         planCategory: defaultPlan.category,
@@ -103,14 +176,13 @@ export class SubscriptionsService {
     }
 
     const trialPlan = await this.plansService.ensureDefaultTrialPlan();
+    const trialPlanId = new Types.ObjectId(getModelId(trialPlan));
     const startDate = new Date();
-    const endDate = new Date(
-      startDate.getTime() + 5 * 24 * 60 * 60 * 1000,
-    );
+    const endDate = new Date(startDate.getTime() + 5 * 24 * 60 * 60 * 1000);
 
     const created = await this.subscriptionModel.create({
       userId: userIdObj,
-      planId: trialPlan._id,
+      planId: trialPlanId,
       planName: trialPlan.name,
       planCode: trialPlan.code,
       planCategory: 'trial',
@@ -134,9 +206,13 @@ export class SubscriptionsService {
       endDate,
       expiresAt: endDate,
       tokenLimit:
-        trialPlan.tokenLimit ?? trialPlan.limits?.monthlyTokens ?? TRIAL_LIMITS.monthlyTokens,
+        trialPlan.tokenLimit ??
+        trialPlan.limits?.monthlyTokens ??
+        TRIAL_LIMITS.monthlyTokens,
       tokensRemaining:
-        trialPlan.tokenLimit ?? trialPlan.limits?.monthlyTokens ?? TRIAL_LIMITS.monthlyTokens,
+        trialPlan.tokenLimit ??
+        trialPlan.limits?.monthlyTokens ??
+        TRIAL_LIMITS.monthlyTokens,
       dailyMessageLimit: trialPlan.dailyMessageLimit ?? 0,
       monthlyMessageLimit:
         trialPlan.monthlyMessageLimit ??
@@ -189,7 +265,9 @@ export class SubscriptionsService {
     const subscription = await this.ensureUserSubscription(userId);
     const usageSnapshot = this.buildUsageSnapshot(subscription);
     const now = Date.now();
-    const endDate = subscription.endDate ? new Date(subscription.endDate) : null;
+    const endDate = subscription.endDate
+      ? new Date(subscription.endDate)
+      : null;
     const remainingMs = endDate ? endDate.getTime() - now : 0;
     const trialDaysRemaining =
       subscription.planCode === 'trial' && remainingMs > 0
@@ -265,11 +343,7 @@ export class SubscriptionsService {
 
   async incrementUsage(
     userId: string,
-    field:
-      | 'chatsUsed'
-      | 'messagesUsed'
-      | 'documentsUsedMB'
-      | 'tokensUsed',
+    field: 'chatsUsed' | 'messagesUsed' | 'documentsUsedMB' | 'tokensUsed',
     amount = 1,
   ) {
     const userIdObj = new Types.ObjectId(userId);
@@ -284,7 +358,10 @@ export class SubscriptionsService {
 
   async findAllForAdmin() {
     const subscriptions = await this.subscriptionModel.find().lean().exec();
-    const userIds = subscriptions.map((subscription: any) => subscription.userId);
+    const typedSubscriptions = subscriptions as LeanSubscription[];
+    const userIds = typedSubscriptions.map(
+      (subscription) => subscription.userId,
+    );
     const users = await this.userModel
       .find({ _id: { $in: userIds } })
       .select('email name')
@@ -292,14 +369,16 @@ export class SubscriptionsService {
       .exec();
 
     const usersById = new Map(
-      users.map((user: any) => [user._id.toString(), user]),
+      (users as AdminUserSummary[]).map((user) => [user._id.toString(), user]),
     );
 
     const normalizedSubscriptions = await Promise.all(
-      subscriptions.map((subscription: any) => this.resolveLifecycleState(subscription)),
+      typedSubscriptions.map((subscription) =>
+        this.resolveLifecycleState(subscription),
+      ),
     );
 
-    return normalizedSubscriptions.map((subscription: any) => {
+    return normalizedSubscriptions.map((subscription) => {
       const user = usersById.get(subscription.userId.toString());
 
       return {
@@ -310,11 +389,130 @@ export class SubscriptionsService {
     });
   }
 
+  async findAllForAdminPaginated(query: AdminSubscriptionListQuery) {
+    const { page, limit, skip } = normalizePagination(query);
+    const filter: Record<string, unknown> = {};
+
+    if (query.status && query.status !== 'all') {
+      filter.status = query.status;
+    }
+
+    const search = query.search?.trim();
+    let allowedUserIds: Types.ObjectId[] | undefined;
+
+    if (search) {
+      const users = await this.userModel
+        .find({
+          $or: [
+            { email: { $regex: search, $options: 'i' } },
+            { name: { $regex: search, $options: 'i' } },
+          ],
+        })
+        .select('_id')
+        .lean()
+        .exec();
+
+      allowedUserIds = (users as AdminUserSummary[]).map((user) => user._id);
+      filter.$or = [
+        { planName: { $regex: search, $options: 'i' } },
+        { planCode: { $regex: search, $options: 'i' } },
+        { userId: { $in: allowedUserIds } },
+      ];
+    }
+
+    const [subscriptions, total] = await Promise.all([
+      this.subscriptionModel
+        .find(filter)
+        .sort({ updatedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+        .exec(),
+      this.subscriptionModel.countDocuments(filter).exec(),
+    ]);
+
+    const typedSubscriptions = subscriptions as LeanSubscription[];
+    const userIds = typedSubscriptions.map(
+      (subscription) => subscription.userId,
+    );
+    const users = await this.userModel
+      .find({ _id: { $in: userIds } })
+      .select('email name')
+      .lean()
+      .exec();
+
+    const usersById = new Map(
+      (users as AdminUserSummary[]).map((user) => [user._id.toString(), user]),
+    );
+
+    const normalizedSubscriptions = await Promise.all(
+      typedSubscriptions.map((subscription) =>
+        this.resolveLifecycleState(subscription),
+      ),
+    );
+
+    const data = normalizedSubscriptions.map((subscription) => {
+      const user = usersById.get(subscription.userId.toString());
+
+      return {
+        ...subscription,
+        userName: user?.name || user?.email || subscription.userId.toString(),
+        usageSnapshot: this.buildUsageSnapshot(subscription),
+      };
+    });
+
+    return buildPaginatedResult(data, page, limit, total);
+  }
+
   async updateById(id: string, updateSubscriptionDto: UpdateSubscriptionDto) {
     const current = await this.subscriptionModel.findById(id).lean().exec();
     if (!current) {
       throw new NotFoundException('Suscripcion no encontrada');
     }
+
+    const selectedPlan = updateSubscriptionDto.planId
+      ? await this.plansService.findById(updateSubscriptionDto.planId)
+      : null;
+
+    const nextLimits = updateSubscriptionDto.limits
+      ? {
+          ...DEFAULT_LIMITS,
+          ...(selectedPlan?.limits || {}),
+          ...(current.limits || {}),
+          ...updateSubscriptionDto.limits,
+        }
+      : current.limits || DEFAULT_LIMITS;
+
+    const nextTokenLimit = selectedPlan
+      ? Number(
+          selectedPlan.tokenLimit ??
+            nextLimits.monthlyTokens ??
+            DEFAULT_LIMITS.monthlyTokens,
+        )
+      : Number(
+          current.tokenLimit ??
+            nextLimits.monthlyTokens ??
+            DEFAULT_LIMITS.monthlyTokens,
+        );
+
+    const nextDailyMessageLimit = selectedPlan
+      ? Number(selectedPlan.dailyMessageLimit ?? current.dailyMessageLimit ?? 0)
+      : Number(current.dailyMessageLimit ?? 0);
+
+    const nextMonthlyMessageLimit = selectedPlan
+      ? Number(
+          selectedPlan.monthlyMessageLimit ??
+            nextLimits.maxMessagesPerMonth ??
+            current.monthlyMessageLimit ??
+            DEFAULT_LIMITS.maxMessagesPerMonth,
+        )
+      : Number(
+          nextLimits.maxMessagesPerMonth ??
+            current.monthlyMessageLimit ??
+            DEFAULT_LIMITS.maxMessagesPerMonth,
+        );
+
+    const currentTokensUsed = Number(current.currentUsage?.tokensUsed ?? 0);
 
     const updatedSubscription = await this.subscriptionModel
       .findByIdAndUpdate(
@@ -334,11 +532,7 @@ export class SubscriptionsService {
               : {}),
             ...(updateSubscriptionDto.limits
               ? {
-                  limits: {
-                    ...DEFAULT_LIMITS,
-                    ...(current.limits || {}),
-                    ...updateSubscriptionDto.limits,
-                  },
+                  limits: nextLimits,
                 }
               : {}),
             ...(updateSubscriptionDto.startDate
@@ -353,6 +547,21 @@ export class SubscriptionsService {
                   expiresAt: new Date(updateSubscriptionDto.endDate),
                 }
               : {}),
+            ...(selectedPlan
+              ? {
+                  tokenLimit: nextTokenLimit,
+                  tokensRemaining: Math.max(
+                    nextTokenLimit - currentTokensUsed,
+                    0,
+                  ),
+                  dailyMessageLimit: nextDailyMessageLimit,
+                  monthlyMessageLimit: nextMonthlyMessageLimit,
+                }
+              : updateSubscriptionDto.limits
+                ? {
+                    monthlyMessageLimit: nextMonthlyMessageLimit,
+                  }
+                : {}),
           },
         },
         { new: true },
@@ -390,7 +599,7 @@ export class SubscriptionsService {
       now.getTime() + params.durationDays * 24 * 60 * 60 * 1000,
     );
 
-    const nextLimits = {
+    const nextLimits: SubscriptionLimits = {
       ...DEFAULT_LIMITS,
       ...(existing.limits || {}),
       ...(params.limits || {}),
@@ -439,7 +648,7 @@ export class SubscriptionsService {
             tokensRemaining:
               Number(nextLimits.monthlyTokens ?? 0) +
               Number(nextLimits.extraTokens ?? 0),
-            dailyMessageLimit: Number((nextLimits as any).dailyMessageLimit ?? 0),
+            dailyMessageLimit: Number(nextLimits.dailyMessageLimit ?? 0),
             monthlyMessageLimit: Number(nextLimits.maxMessagesPerMonth ?? 0),
             notes: params.adminNotes || '',
           },
@@ -448,9 +657,15 @@ export class SubscriptionsService {
       )
       .exec();
 
+    if (!subscription) {
+      throw new NotFoundException('Suscripcion no encontrada');
+    }
+
+    const subscriptionId = new Types.ObjectId(String(subscription.id));
+
     await this.activationModel.create({
       userId: userIdObj,
-      subscriptionId: subscription._id,
+      subscriptionId,
       planId: params.planId ? new Types.ObjectId(params.planId) : null,
       planName: params.planName,
       planCode: params.planCode,
@@ -478,8 +693,17 @@ export class SubscriptionsService {
   }
 
   async findByUserIdForAdmin(userId: string) {
+    return this.findByUserOrSubscriptionIdForAdmin(userId);
+  }
+
+  async findByUserOrSubscriptionIdForAdmin(id: string) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException('Suscripcion no encontrada');
+    }
+
+    const objectId = new Types.ObjectId(id);
     const item = await this.subscriptionModel
-      .findOne({ userId: new Types.ObjectId(userId) })
+      .findOne({ $or: [{ userId: objectId }, { _id: objectId }] })
       .lean()
       .exec();
 
@@ -495,7 +719,7 @@ export class SubscriptionsService {
     };
   }
 
-  private async resolveLifecycleState(subscription: any) {
+  private async resolveLifecycleState(subscription: LeanSubscription) {
     if (!subscription?._id) {
       return subscription;
     }
@@ -517,13 +741,15 @@ export class SubscriptionsService {
     return this.downgradeToFree(subscription);
   }
 
-  private async downgradeToFree(subscription: any) {
+  private async downgradeToFree(subscription: LeanSubscription) {
     const freePlan = await this.plansService.ensureDefaultFreePlan();
     const now = new Date();
     const nextEndDate = new Date(
       now.getTime() + freePlan.durationDays * 24 * 60 * 60 * 1000,
     );
-    const isTrial = subscription.planCode === 'trial' || subscription.planCategory === 'trial';
+    const isTrial =
+      subscription.planCode === 'trial' ||
+      subscription.planCategory === 'trial';
 
     const updated = await this.subscriptionModel
       .findByIdAndUpdate(
@@ -552,9 +778,13 @@ export class SubscriptionsService {
             endDate: nextEndDate,
             expiresAt: nextEndDate,
             tokenLimit:
-              freePlan.tokenLimit ?? freePlan.limits?.monthlyTokens ?? DEFAULT_LIMITS.monthlyTokens,
+              freePlan.tokenLimit ??
+              freePlan.limits?.monthlyTokens ??
+              DEFAULT_LIMITS.monthlyTokens,
             tokensRemaining:
-              freePlan.tokenLimit ?? freePlan.limits?.monthlyTokens ?? DEFAULT_LIMITS.monthlyTokens,
+              freePlan.tokenLimit ??
+              freePlan.limits?.monthlyTokens ??
+              DEFAULT_LIMITS.monthlyTokens,
             dailyMessageLimit: freePlan.dailyMessageLimit ?? 0,
             monthlyMessageLimit:
               freePlan.monthlyMessageLimit ??
@@ -573,7 +803,7 @@ export class SubscriptionsService {
     return updated || subscription;
   }
 
-  private buildUsageSnapshot(subscription: any) {
+  private buildUsageSnapshot(subscription: LeanSubscription) {
     const usage = subscription.currentUsage || {};
     const limits = {
       ...DEFAULT_LIMITS,

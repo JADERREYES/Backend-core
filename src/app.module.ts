@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProfilesModule } from './modules/profiles/profiles.module';
@@ -17,34 +19,30 @@ import { SupportRequestsModule } from './modules/support-requests/support-reques
 import { PaymentMethodsModule } from './modules/payment-methods/payment-methods.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { SubscriptionRequestsModule } from './modules/subscription-requests/subscription-requests.module';
+import { validateEnv } from './config/env.validation';
+import { createMongooseOptions } from './config/mongodb.config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: '.env',
+      validate: validateEnv,
     }),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => {
-        const uri = configService.get<string>('MONGODB_URI');
-        const dbName = configService.get<string>('MONGODB_DB_NAME');
-
-        if (!uri) {
-          throw new Error('MONGODB_URI is not defined in environment variables');
-        }
-
-        if (!dbName) {
-          throw new Error(
-            'MONGODB_DB_NAME is not defined in environment variables',
-          );
-        }
-
-        return {
-          uri,
-          dbName,
-        };
-      },
+      useFactory: createMongooseOptions,
       inject: [ConfigService],
+    }),
+    ThrottlerModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => [
+        {
+          ttl: Number(configService.get<string>('THROTTLE_TTL_MS') || 60000),
+          limit: Number(configService.get<string>('THROTTLE_LIMIT') || 120),
+        },
+      ],
     }),
     UsersModule,
     AuthModule,
@@ -62,6 +60,12 @@ import { SubscriptionRequestsModule } from './modules/subscription-requests/subs
     PaymentMethodsModule,
     PlansModule,
     SubscriptionRequestsModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}

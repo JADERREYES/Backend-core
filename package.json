@@ -13,12 +13,14 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main.js",
     "admin:reset": "node scripts/reset-superadmin.js",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "bootstrap:prod-data": "node scripts/bootstrap-production-data.js",
+    "cleanup:test-data": "node scripts/cleanup-test-data.js",
+    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
