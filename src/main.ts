@@ -27,6 +27,8 @@ function isAllowedVercelPreview(origin: string) {
     }
 
     return (
+      hostname === 'frontend-usuario.vercel.app' ||
+      hostname === 'frontend-super-admin.vercel.app' ||
       hostname.startsWith('frontend-usuario-') ||
       hostname.startsWith('frontend-super-admin-')
     );
@@ -90,19 +92,47 @@ async function bootstrap() {
     new Set([...defaultOrigins, ...configuredOrigins]),
   );
 
+  const isOriginAllowed = (origin?: string | null) => {
+    if (!origin) {
+      return true;
+    }
+
+    const normalizedOrigin = normalizeOrigin(origin);
+    return (
+      allowedOrigins.has(normalizedOrigin) ||
+      isAllowedVercelPreview(normalizedOrigin)
+    );
+  };
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const requestOrigin =
+      typeof req.headers.origin === 'string' ? req.headers.origin : '';
+
+    if (requestOrigin && isOriginAllowed(requestOrigin)) {
+      res.header('Access-Control-Allow-Origin', requestOrigin);
+      res.header('Vary', 'Origin');
+      res.header('Access-Control-Allow-Credentials', 'true');
+      res.header(
+        'Access-Control-Allow-Methods',
+        'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+      );
+      res.header(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, Accept, Origin, X-Requested-With',
+      );
+    }
+
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+
+    next();
+  });
+
   app.enableCors({
     origin: (origin, callback) => {
-      if (!origin) {
-        callback(null, true);
-        return;
-      }
-
-      const normalizedOrigin = normalizeOrigin(origin);
-      const isAllowed =
-        allowedOrigins.has(normalizedOrigin) ||
-        isAllowedVercelPreview(normalizedOrigin);
-
-      callback(null, isAllowed);
+      callback(null, isOriginAllowed(origin));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
