@@ -20,6 +20,8 @@ export class PaymentMethodsService {
   ) {}
 
   async findActiveForUsers() {
+    await this.ensureDefaultVisiblePaymentMethod();
+
     return this.paymentMethodModel
       .find({ isActive: true })
       .sort({ sortOrder: 1, createdAt: 1 })
@@ -143,5 +145,42 @@ export class PaymentMethodsService {
     }
 
     return { deleted: true, id };
+  }
+
+  async ensureDefaultVisiblePaymentMethod() {
+    const activeMethod = await this.paymentMethodModel
+      .findOne({ isActive: true })
+      .sort({ sortOrder: 1, createdAt: 1 })
+      .exec();
+
+    if (activeMethod) {
+      return activeMethod;
+    }
+
+    let paymentMethod = await this.paymentMethodModel.findOne({ code: 'nequi' }).exec();
+
+    if (!paymentMethod) {
+      paymentMethod = await this.paymentMethodModel.create({
+        name: 'Nequi',
+        code: 'nequi',
+        provider: 'Nequi',
+        type: 'wallet',
+        accountLabel: 'Numero de pago',
+        accountValue: '3001234567',
+        accountNumber: '3001234567',
+        accountHolder: 'MenteAmiga',
+        holderName: 'MenteAmiga',
+        instructions:
+          'Realiza la transferencia y comparte el comprobante desde la app.',
+        isActive: true,
+        displayOrder: 0,
+        sortOrder: 0,
+      });
+    } else if (!paymentMethod.isActive) {
+      paymentMethod.isActive = true;
+      await paymentMethod.save();
+    }
+
+    return paymentMethod;
   }
 }

@@ -33,6 +33,10 @@ export class PlansService {
   constructor(@InjectModel(Plan.name) private readonly planModel: Model<Plan>) {}
 
   async findActiveForUsers() {
+    await this.ensureDefaultFreePlan();
+    await this.ensureDefaultTrialPlan();
+    await this.ensureDefaultPremiumPlan();
+
     return this.planModel
       .find({ isActive: true })
       .sort({ sortOrder: 1, price: 1, createdAt: 1 })
@@ -238,6 +242,52 @@ export class PlansService {
         displayOrder: 1,
         sortOrder: 1,
       });
+    }
+
+    return plan;
+  }
+
+  async ensureDefaultPremiumPlan() {
+    let plan = await this.planModel
+      .findOne({
+        isActive: true,
+        category: { $in: ['premium', 'subscription'] },
+      })
+      .exec();
+
+    if (!plan) {
+      plan = await this.planModel.findOne({ code: 'premium-mensual' }).exec();
+    }
+
+    if (!plan) {
+      plan = await this.planModel.create({
+        name: 'Premium Mensual',
+        code: 'premium-mensual',
+        description: 'Plan premium mensual para usuarios activos',
+        category: 'premium',
+        price: 29900,
+        currency: 'COP',
+        durationDays: 30,
+        tokenLimit: 10000,
+        dailyMessageLimit: 0,
+        monthlyMessageLimit: 5000,
+        features: ['premium'],
+        limits: {
+          maxChatsPerMonth: 500,
+          maxMessagesPerMonth: 5000,
+          maxDocumentsMB: 250,
+          monthlyTokens: 10000,
+          extraTokens: 0,
+        },
+        isActive: true,
+        isDefault: false,
+        isCustomizable: true,
+        displayOrder: 2,
+        sortOrder: 2,
+      });
+    } else if (!plan.isActive) {
+      plan.isActive = true;
+      await plan.save();
     }
 
     return plan;
