@@ -18,6 +18,14 @@ async function ensureApp() {
 }
 
 export default async function handler(req: any, res: any) {
-  await ensureApp();
-  return server(req, res);
+  try {
+    await ensureApp();
+    return server(req, res);
+  } catch (error) {
+    console.error('Backend-core serverless bootstrap failed', error);
+    res.status(500).json({
+      message: 'Backend bootstrap failed',
+      error: error instanceof Error ? error.message : 'unknown_error',
+    });
+  }
 }
