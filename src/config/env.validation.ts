@@ -80,6 +80,23 @@ function validateMongoUri(uri: string) {
   new URL(uri);
 }
 
+function validateMongoUriForProduction(env: EnvironmentVariables) {
+  if (env.NODE_ENV !== 'production') {
+    return;
+  }
+
+  const uri = env.MONGODB_URI?.trim();
+  if (!uri) {
+    return;
+  }
+
+  const parsed = new URL(uri);
+  const hostname = parsed.hostname.toLowerCase();
+  if (['localhost', '127.0.0.1', '::1'].includes(hostname)) {
+    throw new Error('MONGODB_URI cannot point to localhost in production');
+  }
+}
+
 function validateMongoDbName(env: EnvironmentVariables) {
   const value = env.MONGODB_DB_NAME?.trim();
 
@@ -211,6 +228,28 @@ function validateOptionalBoolean(
   }
 }
 
+function validateNodeEnv(env: EnvironmentVariables) {
+  const value = env.NODE_ENV?.trim();
+
+  if (!value) {
+    return;
+  }
+
+  if (!['development', 'test', 'production'].includes(value)) {
+    throw new Error('NODE_ENV must be development, test, or production');
+  }
+
+  if (
+    (process.env.VERCEL ||
+      process.env.VERCEL_ENV ||
+      process.env.RENDER ||
+      process.env.RENDER_EXTERNAL_URL) &&
+    value !== 'production'
+  ) {
+    throw new Error('NODE_ENV must be production on managed cloud runtimes');
+  }
+}
+
 function validateStorageAllowedRemoteHosts(env: EnvironmentVariables) {
   const value = env.STORAGE_ALLOWED_REMOTE_HOST;
 
@@ -323,9 +362,11 @@ export function validateEnv(config: EnvironmentVariables) {
 
   validatePort(validatedConfig);
   validateMongoUri(validatedConfig.MONGODB_URI);
+  validateMongoUriForProduction(validatedConfig);
   validateMongoDbName(validatedConfig);
   validateJwtSecret(validatedConfig.JWT_SECRET);
   validateJwtExpiresIn(validatedConfig.JWT_EXPIRES_IN);
+  validateNodeEnv(validatedConfig);
   validateCorsOrigins(validatedConfig);
   validateMongoDnsServers(validatedConfig);
   validateRedisUrl(validatedConfig);

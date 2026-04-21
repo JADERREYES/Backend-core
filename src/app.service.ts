@@ -10,6 +10,8 @@ export class AppService {
       ok: true,
       service: 'menteamiga-backend',
       environment: this.configService.get<string>('NODE_ENV') || 'development',
+      timestamp: new Date().toISOString(),
+      uptime: Math.floor(process.uptime()),
     };
   }
 }

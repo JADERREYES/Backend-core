@@ -8,6 +8,47 @@ import { AppModule } from './app.module';
 
 const bootstrapLogger = new Logger('Bootstrap');
 
+function logEnvironmentSummary(configService: ConfigService) {
+  const nodeEnv = configService.get<string>('NODE_ENV') || 'development';
+  const mongoDbName =
+    configService.get<string>('MONGODB_DB_NAME') || '(missing)';
+  const corsOrigins = configService.get<string>('CORS_ORIGINS') || '';
+  const redisUrl = configService.get<string>('REDIS_URL') || '';
+  const mongoUri = configService.get<string>('MONGODB_URI') || '';
+  const jwtSecret = configService.get<string>('JWT_SECRET') || '';
+
+  bootstrapLogger.log(
+    [
+      `Runtime summary: NODE_ENV=${nodeEnv}`,
+      `MONGODB_DB_NAME=${mongoDbName}`,
+      `MONGODB_URI_CONFIGURED=${mongoUri ? 'yes' : 'no'}`,
+      `JWT_SECRET_CONFIGURED=${jwtSecret ? 'yes' : 'no'}`,
+      `CORS_ORIGINS_CONFIGURED=${corsOrigins ? 'yes' : 'no'}`,
+      `REDIS_CONFIGURED=${redisUrl ? 'yes' : 'no'}`,
+      `VERCEL_ENV=${process.env.VERCEL_ENV || 'not_set'}`,
+      `RENDER=${process.env.RENDER ? 'yes' : 'no'}`,
+    ].join(' | '),
+  );
+
+  if (process.env.VERCEL && nodeEnv !== 'production') {
+    bootstrapLogger.warn(
+      'Running on Vercel with NODE_ENV different from production.',
+    );
+  }
+
+  if (process.env.RENDER && nodeEnv !== 'production') {
+    bootstrapLogger.warn(
+      'Running on Render with NODE_ENV different from production.',
+    );
+  }
+
+  if (nodeEnv === 'production' && !corsOrigins.trim()) {
+    bootstrapLogger.warn(
+      'CORS_ORIGINS is empty in production. Browser clients may be blocked.',
+    );
+  }
+}
+
 function normalizeOrigin(origin: string) {
   return origin
     .trim()
@@ -183,6 +224,7 @@ export async function createConfiguredApp(
 
   const configService = app.get(ConfigService);
   applyAppConfiguration(app, configService);
+  logEnvironmentSummary(configService);
   bootstrapLogger.log(
     `Nest application configured for ${
       configService.get<string>('NODE_ENV') || 'development'
@@ -196,7 +238,17 @@ export async function bootstrapStandalone() {
   const app = await createConfiguredApp();
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') || 3000;
+  const host =
+    configService.get<string>('HOST') ||
+    (configService.get<string>('NODE_ENV') === 'production'
+      ? '0.0.0.0'
+      : '0.0.0.0');
 
-  await app.listen(port);
-  bootstrapLogger.log(`Backend running on http://localhost:${port}`);
+  await app.listen(port, host);
+  bootstrapLogger.log(
+    `Backend running on http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`,
+  );
+  bootstrapLogger.log(
+    `Health endpoints available at / and /health on port ${port}`,
+  );
 }
