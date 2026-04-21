@@ -242,6 +242,30 @@ function validateStorageAllowedRemoteHosts(env: EnvironmentVariables) {
   }
 }
 
+function validateRedisUrl(env: EnvironmentVariables) {
+  const value = env.REDIS_URL?.trim();
+
+  if (!value) {
+    return;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('REDIS_URL must be a valid URL');
+  }
+
+  if (
+    env.NODE_ENV === 'production' &&
+    ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname.toLowerCase())
+  ) {
+    throw new Error(
+      'REDIS_URL cannot point to localhost in production. Remove it or use a managed Redis service.',
+    );
+  }
+}
+
 function validateNotificationProviders(env: EnvironmentVariables) {
   const emailProvider = env.EMAIL_PROVIDER?.trim() || 'none';
   if (emailProvider && !['none', 'resend'].includes(emailProvider)) {
@@ -304,6 +328,7 @@ export function validateEnv(config: EnvironmentVariables) {
   validateJwtExpiresIn(validatedConfig.JWT_EXPIRES_IN);
   validateCorsOrigins(validatedConfig);
   validateMongoDnsServers(validatedConfig);
+  validateRedisUrl(validatedConfig);
   validateStorageProvider(validatedConfig);
   validateStorageAllowedRemoteHosts(validatedConfig);
   validateNotificationProviders(validatedConfig);

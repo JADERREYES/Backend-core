@@ -5,6 +5,15 @@ import * as dns from 'dns';
 
 const logger = new Logger('MongoDBConfig');
 
+function describeMongoTarget(uri: string, dbName: string) {
+  try {
+    const parsed = new URL(uri);
+    return `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ''}/${dbName}`;
+  } catch {
+    return `database ${dbName}`;
+  }
+}
+
 function getRequiredConfig(configService: ConfigService, key: string) {
   const value = configService.get<string>(key)?.trim();
 
@@ -81,12 +90,29 @@ export async function createMongooseOptions(
 
   const uri = getRequiredConfig(configService, 'MONGODB_URI');
   const dbName = getRequiredConfig(configService, 'MONGODB_DB_NAME');
+  const mongoTarget = describeMongoTarget(uri, dbName);
 
   await warnIfMongoSrvIsNotResolvable(uri);
+  logger.log(`Preparing MongoDB connection to ${mongoTarget}`);
 
   return {
     uri,
     dbName,
     serverSelectionTimeoutMS: 10000,
+    connectionFactory: (connection) => {
+      connection.on('connected', () => {
+        logger.log(`MongoDB connected to ${mongoTarget}`);
+      });
+      connection.on('error', (error) => {
+        logger.error(
+          `MongoDB connection error for ${mongoTarget}: ${error.message}`,
+        );
+      });
+      connection.on('disconnected', () => {
+        logger.warn(`MongoDB disconnected from ${mongoTarget}`);
+      });
+
+      return connection;
+    },
   };
 }

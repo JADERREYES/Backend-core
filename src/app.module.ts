@@ -3,6 +3,8 @@ import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProfilesModule } from './modules/profiles/profiles.module';
@@ -23,6 +25,7 @@ import { validateEnv } from './config/env.validation';
 import { createMongooseOptions } from './config/mongodb.config';
 
 @Module({
+  controllers: [AppController],
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
@@ -62,6 +65,7 @@ import { createMongooseOptions } from './config/mongodb.config';
     SubscriptionRequestsModule,
   ],
   providers: [
+    AppService,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

@@ -1,10 +1,12 @@
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { ExpressAdapter, NestExpressApplication } from '@nestjs/platform-express';
 import { NextFunction, Request, Response } from 'express';
 import { join } from 'path';
 import { AppModule } from './app.module';
+
+const bootstrapLogger = new Logger('Bootstrap');
 
 function normalizeOrigin(origin: string) {
   return origin
@@ -172,12 +174,20 @@ function applyAppConfiguration(
 export async function createConfiguredApp(
   adapter?: ExpressAdapter,
 ): Promise<NestExpressApplication> {
+  bootstrapLogger.log(
+    `Creating Nest application (${adapter ? 'serverless' : 'standalone'})`,
+  );
   const app = adapter
     ? await NestFactory.create<NestExpressApplication>(AppModule, adapter)
     : await NestFactory.create<NestExpressApplication>(AppModule);
 
   const configService = app.get(ConfigService);
   applyAppConfiguration(app, configService);
+  bootstrapLogger.log(
+    `Nest application configured for ${
+      configService.get<string>('NODE_ENV') || 'development'
+    } environment`,
+  );
 
   return app;
 }
@@ -188,5 +198,5 @@ export async function bootstrapStandalone() {
   const port = configService.get<number>('PORT') || 3000;
 
   await app.listen(port);
-  console.log(`Backend running on http://localhost:${port}`);
+  bootstrapLogger.log(`Backend running on http://localhost:${port}`);
 }
