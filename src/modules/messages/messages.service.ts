@@ -14,6 +14,11 @@ export class MessagesService {
   ) {}
 
   async create(createMessageDto: CreateMessageDto): Promise<Message> {
+    await this.chatsService.findOne(
+      createMessageDto.chatId,
+      createMessageDto.senderId,
+    );
+
     const newMessage = new this.messageModel({
       ...createMessageDto,
       chatId: new Types.ObjectId(createMessageDto.chatId),
