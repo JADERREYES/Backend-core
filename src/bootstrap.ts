@@ -2,11 +2,13 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { ExpressAdapter, NestExpressApplication } from '@nestjs/platform-express';
+import helmet from 'helmet';
 import { NextFunction, Request, Response } from 'express';
 import { join } from 'path';
 import { AppModule } from './app.module';
 
 const bootstrapLogger = new Logger('Bootstrap');
+const rejectedOrigins = new Set<string>();
 
 function logEnvironmentSummary(configService: ConfigService) {
   const nodeEnv = configService.get<string>('NODE_ENV') || 'development';
@@ -57,6 +59,16 @@ function normalizeOrigin(origin: string) {
     .toLowerCase();
 }
 
+function logRejectedOrigin(origin: string) {
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (rejectedOrigins.has(normalizedOrigin)) {
+    return;
+  }
+
+  rejectedOrigins.add(normalizedOrigin);
+  bootstrapLogger.warn(`Rejected CORS origin: ${normalizedOrigin}`);
+}
+
 function isAllowedVercelPreview(origin: string) {
   try {
     const { protocol, hostname } = new URL(origin);
@@ -87,6 +99,12 @@ function applyAppConfiguration(
   const isProduction = configService.get<string>('NODE_ENV') === 'production';
 
   app.set('trust proxy', 1);
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: false,
+    }),
+  );
   app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -165,6 +183,9 @@ function applyAppConfiguration(
         'Content-Type, Authorization, Accept, Origin, X-Requested-With',
       );
     }
+    if (requestOrigin && !isOriginAllowed(requestOrigin)) {
+      logRejectedOrigin(requestOrigin);
+    }
 
     if (req.method === 'OPTIONS') {
       res.sendStatus(204);
@@ -230,6 +251,7 @@ export async function createConfiguredApp(
       configService.get<string>('NODE_ENV') || 'development'
     } environment`,
   );
+  bootstrapLogger.log('JWT, validation pipe, helmet and CORS hardening enabled');
 
   return app;
 }

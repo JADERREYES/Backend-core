@@ -1,4 +1,5 @@
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CreateChatSessionDto } from './dto/create-chat-session.dto';
@@ -43,6 +44,7 @@ export class AiController {
   }
 
   @Post('chat')
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   async chat(
     @Body('message') message: string,
     @CurrentUser() user: CurrentUserPayload,
@@ -72,6 +74,7 @@ export class AiController {
   }
 
   @Post('chat-session')
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   async chatSession(
     @Body() dto: CreateChatSessionDto,
     @CurrentUser() user: CurrentUserPayload,

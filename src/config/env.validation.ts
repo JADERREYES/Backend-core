@@ -165,6 +165,10 @@ function validateCorsOrigins(env: EnvironmentVariables) {
   }
 
   for (const origin of origins) {
+    if (env.NODE_ENV === 'production' && origin === '*') {
+      throw new Error('CORS_ORIGINS cannot use * in production');
+    }
+
     if (origin !== '*') {
       new URL(origin);
     }
