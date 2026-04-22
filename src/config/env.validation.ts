@@ -217,10 +217,7 @@ function validateStorageProvider(env: EnvironmentVariables) {
   }
 }
 
-function validateOptionalBoolean(
-  env: EnvironmentVariables,
-  key: string,
-) {
+function validateOptionalBoolean(env: EnvironmentVariables, key: string) {
   const value = env[key];
 
   if (!value) {
