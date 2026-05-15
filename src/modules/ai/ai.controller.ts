@@ -1,4 +1,13 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Put,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -7,13 +16,17 @@ import {
   CurrentUser,
   type CurrentUserPayload,
 } from '../../common/decorators/current-user.decorator';
+import { UserMemoriesService } from './user-memories.service';
 
 const usageCounts = new Map<string, { count: number; date: string }>();
 
 @Controller('ai')
 @UseGuards(JwtAuthGuard)
 export class AiController {
-  constructor(private readonly aiService: AiService) {}
+  constructor(
+    private readonly aiService: AiService,
+    private readonly userMemoriesService: UserMemoriesService,
+  ) {}
 
   private validateDailyUsage(userId: string) {
     const DAILY_LIMIT = 5;
@@ -60,7 +73,9 @@ export class AiController {
       };
     }
 
-    const aiResult = await this.aiService.generateResponse(message);
+    const aiResult = await this.aiService.generateResponse(message, {
+      userId: user.userId,
+    });
 
     return {
       success: true,
@@ -103,5 +118,34 @@ export class AiController {
       remaining: usage.remaining,
       timestamp: new Date(),
     };
+  }
+
+  @Get('memories')
+  async listMemories(@CurrentUser() user: CurrentUserPayload) {
+    return this.userMemoriesService.listActiveByUser(user.userId, 10);
+  }
+
+  @Put('memories/:id/disable')
+  async disableMemory(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.userMemoriesService.disable(user.userId, id);
+  }
+
+  @Put('memories/:id/enable')
+  async enableMemory(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.userMemoriesService.enable(user.userId, id);
+  }
+
+  @Delete('memories/:id')
+  async deleteMemory(
+    @Param('id') id: string,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.userMemoriesService.delete(user.userId, id);
   }
 }

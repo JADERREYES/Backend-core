@@ -1,46 +1,13 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, PipelineStage, Types } from 'mongoose';
+import { FilterQuery, Model, PipelineStage, Types } from 'mongoose';
 import OpenAI from 'openai';
 import { AdminDocument } from './schemas/document.schema';
 import { DocumentChunk } from './schemas/document-chunk.schema';
 
-type RagChunk = {
-  documentId: string;
-  documentTitle: string;
-  chunkIndex: number;
-  text: string;
-  score: number;
-};
-
-type LeanDocumentChunk = {
-  documentId: Types.ObjectId;
-  documentTitle: string;
-  chunkIndex: number;
-  text: string;
-  embedding?: number[];
-  retrievalMode?: string;
-  documentStatus?: string;
-};
-
-type ChunkInsert = LeanDocumentChunk & {
-  documentStatus: string;
-  documentCategory: string;
-  documentVersion: string;
-  embedding?: number[];
-  embeddingModel: string;
-  textLength: number;
-};
-
-type VectorSearchResult = {
-  documentId: Types.ObjectId;
-  documentTitle: string;
-  chunkIndex: number;
-  text: string;
-  score?: number;
-};
-
+type ChunkOwnerType = 'admin' | 'user' | 'system';
+type ChunkSourceType = 'pdf' | 'txt' | 'manual' | 'chat_memory';
 type RetrievalMode = 'none' | 'keyword' | 'local_semantic' | 'atlas_vector';
 type AtlasVectorStatus =
   | 'not_configured'
@@ -49,14 +16,87 @@ type AtlasVectorStatus =
   | 'empty_result'
   | 'failed';
 
+type RagChunk = {
+  documentId: string;
+  documentTitle: string;
+  chunkIndex: number;
+  totalChunks: number;
+  text: string;
+  score: number;
+  sourceFileName: string;
+  sourceType: ChunkSourceType;
+  ownerType: ChunkOwnerType;
+  metadata?: Record<string, unknown>;
+};
+
+type VectorSearchResult = {
+  documentId: Types.ObjectId;
+  title: string;
+  chunkIndex: number;
+  totalChunks: number;
+  text: string;
+  score?: number;
+  sourceFileName?: string;
+  sourceType: ChunkSourceType;
+  ownerType: ChunkOwnerType;
+  metadata?: Record<string, unknown>;
+};
+
+type LeanDocumentChunk = {
+  documentId: Types.ObjectId;
+  ownerType: ChunkOwnerType;
+  tenantId?: string | null;
+  organizationId?: string | null;
+  userId?: string | null;
+  title: string;
+  sourceFileName: string;
+  sourceType: ChunkSourceType;
+  documentStatus: string;
+  documentCategory: string;
+  documentVersion: string;
+  chunkIndex: number;
+  totalChunks: number;
+  text: string;
+  embedding?: number[];
+  retrievalMode?: string;
+  embeddingModel?: string;
+  textLength?: number;
+  metadata?: Record<string, unknown>;
+  isActive?: boolean;
+};
+
+type ChunkInsert = LeanDocumentChunk;
+
 type IndexableDocument = {
+  _id?: Types.ObjectId;
   title?: string;
   status?: string;
   category?: string;
   version?: string;
   extractedText?: string;
   content?: string;
+  originalFileName?: string;
+  mimeType?: string;
+  fileSize?: number;
+  sourceType?: string;
+  ragEnabled?: boolean;
+  ownerType?: string;
+  tenantId?: string | null;
+  organizationId?: string | null;
+  userId?: string | null;
 };
+
+export type RagSearchFilters = {
+  ownerTypes?: ChunkOwnerType[];
+  tenantId?: string;
+  organizationId?: string;
+  userId?: string;
+  includeGlobalAdmin?: boolean;
+};
+
+const DEFAULT_CHUNK_TARGET_TOKENS = 850;
+const DEFAULT_CHUNK_OVERLAP_TOKENS = 120;
+const CHARS_PER_TOKEN_ESTIMATE = 4;
 
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : 'Unknown error';
@@ -87,11 +127,12 @@ export class DocumentsRagService {
       this.configService.get<string>('OPENAI_EMBEDDING_MODEL') ||
       'text-embedding-3-small';
     this.atlasVectorIndex =
-      this.configService.get<string>('MONGODB_ATLAS_VECTOR_INDEX') || undefined;
+      this.configService.get<string>('MONGODB_ATLAS_VECTOR_INDEX') ||
+      'vector_index';
 
     const openAiApiKey = this.configService.get<string>('OPENAI_API_KEY');
     if (openAiApiKey) {
-      this.openai = new OpenAI({ apiKey: openAiApiKey });
+      this.openai = new OpenAI({ apiKey: openAiApiKey, timeout: 20000 });
     }
 
     this.atlasVectorStatus = this.atlasVectorIndex
@@ -100,10 +141,7 @@ export class DocumentsRagService {
   }
 
   async indexDocument(documentId: string) {
-    const document = await this.documentModel
-      .findById(documentId)
-      .lean()
-      .exec();
+    const document = await this.documentModel.findById(documentId).lean().exec();
 
     if (!document) {
       throw new NotFoundException('Documento no encontrado');
@@ -111,19 +149,20 @@ export class DocumentsRagService {
 
     await this.documentModel
       .findByIdAndUpdate(documentId, {
-        $set: { indexingStatus: 'processing' },
+        $set: { indexingStatus: 'processing', ragError: '' },
       })
       .exec();
 
     try {
       const sourceText = this.getIndexableText(document);
+      const ragEnabled = document.ragEnabled !== false;
+      const shouldStayActive =
+        ragEnabled && String(document.status || '') === 'published';
 
       if (!sourceText) {
-        await this.chunkModel
-          .deleteMany({ documentId: new Types.ObjectId(documentId) })
-          .exec();
+        await this.setDocumentChunksActive(documentId, false);
 
-        const updated = await this.documentModel
+        return await this.documentModel
           .findByIdAndUpdate(
             documentId,
             {
@@ -133,18 +172,22 @@ export class DocumentsRagService {
                 chunkCount: 0,
                 embeddingModel: '',
                 lastIndexedAt: null,
+                ragError: 'No hay texto util para indexar',
               },
             },
             { new: true },
           )
           .lean()
           .exec();
-
-        return updated;
       }
 
       const chunks = this.chunkText(sourceText);
+      if (!chunks.length) {
+        throw new Error('No se pudieron generar chunks a partir del documento');
+      }
+
       const supportsEmbeddings = !!this.openai;
+      const sourceType = this.resolveChunkSourceType(document);
       const chunkDocuments: ChunkInsert[] = [];
 
       for (let index = 0; index < chunks.length; index += 1) {
@@ -155,48 +198,61 @@ export class DocumentsRagService {
 
         chunkDocuments.push({
           documentId: new Types.ObjectId(documentId),
-          documentTitle: document.title,
-          documentStatus: document.status,
-          documentCategory: document.category,
+          ownerType: this.resolveOwnerType(document.ownerType),
+          tenantId: document.tenantId || null,
+          organizationId: document.organizationId || null,
+          userId: document.userId || null,
+          title: document.title || 'Documento',
+          sourceFileName: document.originalFileName || '',
+          sourceType,
+          documentStatus: document.status || 'draft',
+          documentCategory: document.category || 'guidelines',
           documentVersion: document.version || '1.0.0',
           chunkIndex: index,
+          totalChunks: chunks.length,
           text,
           embedding,
           retrievalMode: embedding?.length ? 'semantic' : 'keyword',
           embeddingModel: embedding?.length ? this.embeddingModel : '',
           textLength: text.length,
+          metadata: {
+            category: document.category || 'guidelines',
+            version: document.version || '1.0.0',
+            mimeType: document.mimeType || '',
+            fileSize: Number(document.fileSize || 0),
+          },
+          isActive: shouldStayActive,
         });
       }
 
-      if (chunkDocuments.length) {
-        await this.replaceDocumentChunks(documentId, chunkDocuments);
-      }
+      await this.replaceDocumentChunks(documentId, chunkDocuments);
 
       const retrievalMode = chunkDocuments.some(
-        (chunk) => Array.isArray(chunk.embedding) && chunk.embedding.length,
+        (chunk) => Array.isArray(chunk.embedding) && chunk.embedding.length > 0,
       )
         ? 'semantic'
         : 'keyword';
 
-      const updated = await this.documentModel
+      return await this.documentModel
         .findByIdAndUpdate(
           documentId,
           {
             $set: {
               indexingStatus: 'completed',
-              retrievalMode,
+              retrievalMode: shouldStayActive ? retrievalMode : 'none',
               chunkCount: chunkDocuments.length,
               embeddingModel:
                 retrievalMode === 'semantic' ? this.embeddingModel : '',
               lastIndexedAt: new Date(),
+              ragError: shouldStayActive
+                ? ''
+                : 'Documento desactivado para RAG o no publicado',
             },
           },
           { new: true },
         )
         .lean()
         .exec();
-
-      return updated;
     } catch (error: unknown) {
       this.logger.error(
         `No se pudo indexar el documento ${documentId}`,
@@ -209,6 +265,7 @@ export class DocumentsRagService {
             indexingStatus: 'failed',
             retrievalMode: 'none',
             embeddingModel: '',
+            ragError: getErrorMessage(error),
           },
         })
         .exec();
@@ -249,7 +306,11 @@ export class DocumentsRagService {
     return this.documentModel.findById(documentId).lean().exec();
   }
 
-  async retrieveRelevantContext(query: string, limit = 4) {
+  async retrieveRelevantContext(
+    query: string,
+    limit = 4,
+    filters: RagSearchFilters = {},
+  ) {
     if (!query?.trim()) {
       return this.withRetrievalDiagnostics({
         contextUsed: false,
@@ -261,11 +322,17 @@ export class DocumentsRagService {
       });
     }
 
+    const safeLimit = Math.min(Math.max(limit, 1), 10);
     const canUseSemantic = !!this.openai;
 
     if (canUseSemantic && this.atlasVectorIndex) {
       try {
-        const semantic = await this.retrieveWithAtlasVectorSearch(query, limit);
+        const semantic = await this.retrieveWithAtlasVectorSearch(
+          query,
+          safeLimit,
+          filters,
+        );
+
         if (semantic.length > 0) {
           this.lastAtlasVectorError = '';
           this.lastFallbackReason = '';
@@ -292,10 +359,10 @@ export class DocumentsRagService {
       }
     }
 
-    const chunks = await this.chunkModel
-      .find({ documentStatus: 'published' })
+    const chunks = (await this.chunkModel
+      .find(this.buildChunkMatch(filters))
       .lean()
-      .exec();
+      .exec()) as LeanDocumentChunk[];
 
     if (chunks.length === 0) {
       return this.withRetrievalDiagnostics({
@@ -308,8 +375,7 @@ export class DocumentsRagService {
       });
     }
 
-    const typedChunks = chunks as LeanDocumentChunk[];
-    const semanticChunks = typedChunks.filter(
+    const semanticChunks = chunks.filter(
       (chunk) => Array.isArray(chunk.embedding) && chunk.embedding.length > 0,
     );
 
@@ -319,13 +385,18 @@ export class DocumentsRagService {
         const ranked = semanticChunks
           .map((chunk) => ({
             documentId: chunk.documentId.toString(),
-            documentTitle: chunk.documentTitle,
+            documentTitle: chunk.title,
             chunkIndex: chunk.chunkIndex,
+            totalChunks: chunk.totalChunks,
             text: chunk.text,
-            score: this.cosineSimilarity(queryEmbedding || [], chunk.embedding),
+            score: this.cosineSimilarity(queryEmbedding, chunk.embedding || []),
+            sourceFileName: chunk.sourceFileName,
+            sourceType: chunk.sourceType,
+            ownerType: chunk.ownerType,
+            metadata: chunk.metadata,
           }))
           .sort((a, b) => b.score - a.score)
-          .slice(0, limit)
+          .slice(0, safeLimit)
           .filter((chunk) => chunk.score > 0.2);
 
         if (ranked.length > 0) {
@@ -347,17 +418,22 @@ export class DocumentsRagService {
     }
 
     const queryTokens = this.tokenizeUnicode(query);
-    const ranked = typedChunks
+    const ranked = chunks
       .map((chunk) => ({
         documentId: chunk.documentId.toString(),
-        documentTitle: chunk.documentTitle,
+        documentTitle: chunk.title,
         chunkIndex: chunk.chunkIndex,
+        totalChunks: chunk.totalChunks,
         text: chunk.text,
         score: this.keywordScore(queryTokens, chunk.text),
+        sourceFileName: chunk.sourceFileName,
+        sourceType: chunk.sourceType,
+        ownerType: chunk.ownerType,
+        metadata: chunk.metadata,
       }))
       .filter((chunk) => chunk.score > 0)
       .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
+      .slice(0, safeLimit);
 
     return this.withRetrievalDiagnostics({
       contextUsed: ranked.length > 0,
@@ -374,6 +450,8 @@ export class DocumentsRagService {
   }
 
   async getHealth() {
+    const activeChunkFilter = { isActive: true };
+
     const [
       totalDocuments,
       indexedDocuments,
@@ -388,6 +466,7 @@ export class DocumentsRagService {
         .countDocuments({
           processingStatus: 'indexed',
           indexingStatus: 'completed',
+          ragEnabled: true,
         })
         .exec(),
       this.documentModel
@@ -404,9 +483,13 @@ export class DocumentsRagService {
           $or: [{ processingStatus: 'failed' }, { indexingStatus: 'failed' }],
         })
         .exec(),
-      this.chunkModel.countDocuments().exec(),
-      this.chunkModel.countDocuments({ retrievalMode: 'semantic' }).exec(),
-      this.chunkModel.countDocuments({ retrievalMode: 'keyword' }).exec(),
+      this.chunkModel.countDocuments(activeChunkFilter).exec(),
+      this.chunkModel
+        .countDocuments({ ...activeChunkFilter, retrievalMode: 'semantic' })
+        .exec(),
+      this.chunkModel
+        .countDocuments({ ...activeChunkFilter, retrievalMode: 'keyword' })
+        .exec(),
     ]);
 
     return {
@@ -435,112 +518,139 @@ export class DocumentsRagService {
     };
   }
 
-  private async retrieveWithAtlasVectorSearch(query: string, limit: number) {
+  private async retrieveWithAtlasVectorSearch(
+    query: string,
+    limit: number,
+    filters: RagSearchFilters,
+  ) {
     const queryEmbedding = await this.generateEmbedding(query);
-    if (!queryEmbedding?.length) return [];
-
     const pipeline = [
       {
         $vectorSearch: {
           index: this.atlasVectorIndex,
           path: 'embedding',
           queryVector: queryEmbedding,
-          numCandidates: Math.max(limit * 10, 20),
+          numCandidates: Math.max(limit * 12, 50),
           limit,
-          filter: {
-            documentStatus: 'published',
-          },
+          filter: this.buildAtlasVectorFilter(filters),
         },
       },
       {
         $project: {
           documentId: 1,
-          documentTitle: 1,
+          title: 1,
           chunkIndex: 1,
+          totalChunks: 1,
           text: 1,
+          sourceFileName: 1,
+          sourceType: 1,
+          ownerType: 1,
+          metadata: 1,
           score: { $meta: 'vectorSearchScore' },
         },
       },
     ] as unknown as PipelineStage[];
 
-    const results =
-      await this.chunkModel.aggregate<VectorSearchResult>(pipeline);
+    const results = await this.chunkModel.aggregate<VectorSearchResult>(pipeline);
 
     return results.map((chunk) => ({
       documentId: chunk.documentId.toString(),
-      documentTitle: chunk.documentTitle,
+      documentTitle: chunk.title,
       chunkIndex: chunk.chunkIndex,
+      totalChunks: chunk.totalChunks,
       text: chunk.text,
       score: Number(chunk.score || 0),
+      sourceFileName: chunk.sourceFileName || '',
+      sourceType: chunk.sourceType,
+      ownerType: chunk.ownerType,
+      metadata: chunk.metadata,
     }));
   }
 
   private getIndexableText(document: IndexableDocument) {
-    const extracted = String(document.extractedText || '').trim();
+    const extracted = this.normalizeChunkText(String(document.extractedText || ''));
     if (extracted) return extracted;
 
-    const manualContent = String(document.content || '').trim();
+    const manualContent = this.normalizeChunkText(String(document.content || ''));
     if (manualContent) return manualContent;
 
     return '';
   }
 
-  private chunkText(text: string, maxLength = 1200, overlap = 200) {
-    const cleanText = text.replace(/\r/g, '').trim();
+  private chunkText(
+    text: string,
+    targetTokens = DEFAULT_CHUNK_TARGET_TOKENS,
+    overlapTokens = DEFAULT_CHUNK_OVERLAP_TOKENS,
+  ) {
+    const cleanText = this.normalizeChunkText(text);
     if (!cleanText) return [];
 
-    const paragraphs = cleanText
-      .split(/\n{2,}/)
-      .map((item) => item.trim())
-      .filter(Boolean);
+    const words = cleanText.split(/\s+/).filter(Boolean);
+    if (!words.length) return [];
+
+    const approxWordsPerChunk = Math.max(
+      Math.floor((targetTokens * CHARS_PER_TOKEN_ESTIMATE) / 5),
+      140,
+    );
+    const approxWordsOverlap = Math.min(
+      Math.max(Math.floor((overlapTokens * CHARS_PER_TOKEN_ESTIMATE) / 5), 20),
+      Math.floor(approxWordsPerChunk / 2),
+    );
 
     const chunks: string[] = [];
-    let current = '';
+    let start = 0;
 
-    for (const paragraph of paragraphs.length ? paragraphs : [cleanText]) {
-      const next = current ? `${current}\n\n${paragraph}` : paragraph;
-
-      if (next.length <= maxLength) {
-        current = next;
-        continue;
+    while (start < words.length) {
+      const end = Math.min(start + approxWordsPerChunk, words.length);
+      const chunk = words.slice(start, end).join(' ').trim();
+      if (chunk) {
+        chunks.push(chunk);
       }
 
-      if (current) {
-        chunks.push(current);
+      if (end >= words.length) {
+        break;
       }
 
-      if (paragraph.length <= maxLength) {
-        current = paragraph;
-        continue;
-      }
-
-      let start = 0;
-      while (start < paragraph.length) {
-        const end = Math.min(start + maxLength, paragraph.length);
-        chunks.push(paragraph.slice(start, end));
-        start = Math.max(end - overlap, 0);
-        if (end === paragraph.length) break;
-      }
-
-      current = '';
-    }
-
-    if (current) {
-      chunks.push(current);
+      start = Math.max(end - approxWordsOverlap, start + 1);
     }
 
     return chunks;
   }
 
+  private normalizeChunkText(text: string) {
+    return text
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+  }
+
   private async generateEmbedding(text: string) {
-    if (!this.openai) return undefined;
+    const normalized = this.normalizeChunkText(text);
+    if (!normalized) {
+      throw new Error('No se puede generar embedding para texto vacio');
+    }
 
-    const response = await this.openai.embeddings.create({
-      model: this.embeddingModel,
-      input: text,
-    });
+    if (!this.openai) {
+      return undefined;
+    }
 
-    return response.data[0]?.embedding;
+    try {
+      const response = await this.openai.embeddings.create({
+        model: this.embeddingModel,
+        input: normalized,
+      });
+
+      const embedding = response.data[0]?.embedding;
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        throw new Error('OpenAI no devolvio embedding valido');
+      }
+
+      return embedding;
+    } catch (error: unknown) {
+      throw new Error(`Fallo OpenAI embeddings: ${getErrorMessage(error)}`);
+    }
   }
 
   private async replaceDocumentChunks(
@@ -569,6 +679,102 @@ export class DocumentsRagService {
       .exec();
   }
 
+  private async setDocumentChunksActive(documentId: string, active: boolean) {
+    await this.chunkModel
+      .updateMany(
+        { documentId: new Types.ObjectId(documentId) },
+        { $set: { isActive: active } },
+      )
+      .exec();
+  }
+
+  private buildChunkMatch(filters: RagSearchFilters): FilterQuery<DocumentChunk> {
+    const clauses = this.buildScopedClauses(filters);
+    if (clauses.length === 1) {
+      return clauses[0];
+    }
+
+    return { $or: clauses };
+  }
+
+  private buildAtlasVectorFilter(filters: RagSearchFilters) {
+    const clauses = this.buildScopedClauses(filters);
+    if (clauses.length === 1) {
+      return clauses[0];
+    }
+
+    return { $or: clauses };
+  }
+
+  private buildScopedClauses(filters: RagSearchFilters) {
+    const ownerTypes = filters.ownerTypes?.length
+      ? filters.ownerTypes
+      : (['admin'] as ChunkOwnerType[]);
+    const clauses: Array<Record<string, unknown>> = [];
+
+    if (ownerTypes.includes('admin') && filters.includeGlobalAdmin !== false) {
+      clauses.push(this.withScope({ ownerType: 'admin' }, filters));
+    }
+
+    if (ownerTypes.includes('user') && filters.userId) {
+      clauses.push(
+        this.withScope(
+          {
+            ownerType: 'user',
+            userId: filters.userId,
+          },
+          filters,
+        ),
+      );
+    }
+
+    if (ownerTypes.includes('system')) {
+      clauses.push(this.withScope({ ownerType: 'system' }, filters));
+    }
+
+    if (!clauses.length) {
+      clauses.push(this.withScope({ ownerType: 'admin' }, filters));
+    }
+
+    return clauses.map((clause) => ({
+      ...clause,
+      documentStatus: 'published',
+      isActive: true,
+    }));
+  }
+
+  private withScope(
+    base: Record<string, unknown>,
+    filters: RagSearchFilters,
+  ) {
+    return {
+      ...base,
+      ...(filters.tenantId ? { tenantId: filters.tenantId } : {}),
+      ...(filters.organizationId
+        ? { organizationId: filters.organizationId }
+        : {}),
+    };
+  }
+
+  private resolveOwnerType(ownerType?: string): ChunkOwnerType {
+    return ownerType === 'user' || ownerType === 'system' ? ownerType : 'admin';
+  }
+
+  private resolveChunkSourceType(document: IndexableDocument): ChunkSourceType {
+    if (document.sourceType === 'manual') {
+      return 'manual';
+    }
+
+    const mimeType = String(document.mimeType || '').toLowerCase();
+    const fileName = String(document.originalFileName || '').toLowerCase();
+
+    if (mimeType.includes('pdf') || fileName.endsWith('.pdf')) {
+      return 'pdf';
+    }
+
+    return 'txt';
+  }
+
   private cosineSimilarity(a: number[], b: number[]) {
     if (!a.length || !b.length || a.length !== b.length) return 0;
 
@@ -590,14 +796,6 @@ export class DocumentsRagService {
     return text
       .toLowerCase()
       .split(/[^\p{L}\p{N}]+/u)
-      .map((token) => token.trim())
-      .filter((token) => token.length >= 4);
-  }
-
-  private tokenize(text: string) {
-    return text
-      .toLowerCase()
-      .split(/[^a-zA-Z0-9áéíóúñü]+/)
       .map((token) => token.trim())
       .filter((token) => token.length >= 4);
   }

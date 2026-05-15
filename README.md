@@ -24,9 +24,12 @@ STORAGE_PROVIDER=vercel-blob
 BLOB_READ_WRITE_TOKEN=
 CORS_ORIGINS=http://localhost:5173,http://localhost:5174
 OPENAI_API_KEY=
-OPENAI_CHAT_MODEL=gpt-3.5-turbo
+OPENAI_CHAT_MODEL=gpt-4o-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-MONGODB_ATLAS_VECTOR_INDEX=
+MONGODB_ATLAS_VECTOR_INDEX=vector_index
+ENABLE_USER_MEMORY=true
+AI_SHORT_TERM_MEMORY_LIMIT=14
+RAG_TOP_K=5
 REDIS_URL=
 ```
 
@@ -37,8 +40,10 @@ Notas:
 - En produccion con Vercel Blob usa `STORAGE_PROVIDER=vercel-blob` y define `BLOB_READ_WRITE_TOKEN`.
 - `CORS_ORIGINS` debe incluir las URLs reales de `frontend-usuario` y `frontend-super-admin`, separadas por coma.
 - `OPENAI_API_KEY` es necesaria para `/ai/chat` y `/ai/chat-session`.
-- `MONGODB_ATLAS_VECTOR_INDEX` es opcional. Si no existe, el retrieval documental usa fallback local.
+- `MONGODB_ATLAS_VECTOR_INDEX` habilita Atlas Vector Search sobre `documentchunks`. Si no existe, el retrieval documental usa fallback local.
+- `ENABLE_USER_MEMORY` activa la memoria larga resumida y desactivable del usuario.
 - `REDIS_URL` es opcional. Si no existe, el procesamiento documental usa fallback local.
+- La definicion del indice vectorial esta en [docs/rag-setup.md](./docs/rag-setup.md).
 
 ## Instalación
 

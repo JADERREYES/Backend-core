@@ -5,13 +5,18 @@ import { DocumentsRagService } from '../documents/documents-rag.service';
 import { ChatsService } from '../chats/chats.service';
 import { MessagesService } from '../messages/messages.service';
 import { AlertsService } from '../alerts/alerts.service';
+import { ProfilesService } from '../profiles/profiles.service';
+import { UserMemoriesService } from './user-memories.service';
 
 type AiSource = {
   documentId: string;
   documentTitle: string;
   chunkIndex: number;
+  totalChunks: number;
   score: number;
   excerpt: string;
+  sourceFileName?: string;
+  sourceType?: string;
 };
 
 type AiResponse = {
@@ -34,17 +39,23 @@ type ObjectIdLike = {
   toHexString: () => string;
 };
 
+type MemorySuggestion = {
+  shouldStore?: boolean;
+  type?: 'preference' | 'goal' | 'coping_strategy' | 'support_context' | 'summary';
+  summary?: string;
+  confidence?: number;
+};
+
 const CRISIS_KEYWORD_REGEX =
   /\b(suicid(?:a(?:r(?:me|se)?)?|io|arme|arse)?|matarme|quitarme la vida|autoles(?:ion|ionarme)?|lesionarme|hacerme dano|hacerm[eé] da[nñ]o|no quiero vivir|quiero morir)\b/i;
-
-const DOCUMENT_CONTEXT_KEYWORD_REGEX =
-  /\b(plan|premium|free|trial|suscrip(?:cion|cione?s)?|pago|nequi|comprobante|recibo|factura|precio|valor|cobro|chat(?:s)?|mensaje(?:s)?|limite(?:s)?|documento(?:s)?|archivo(?:s)?|pdf|subir|perfil|privacidad|seguridad|historial|correo|email|whatsapp|admin|superadmin|aprobar|rechazar|activar|activacion|venc(?:e|imiento)|dias?)\b/i;
 
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
   private readonly openai?: OpenAI;
   private readonly chatModel: string;
+  private readonly shortTermLimit: number;
+  private readonly ragTopK: number;
 
   constructor(
     private readonly configService: ConfigService,
@@ -52,25 +63,40 @@ export class AiService {
     private readonly chatsService: ChatsService,
     private readonly messagesService: MessagesService,
     private readonly alertsService: AlertsService,
+    private readonly profilesService: ProfilesService,
+    private readonly userMemoriesService: UserMemoriesService,
   ) {
     const openAiApiKey = this.configService.get<string>('OPENAI_API_KEY');
     if (openAiApiKey) {
       this.openai = new OpenAI({
         apiKey: openAiApiKey,
-        timeout: 20000,
+        timeout: 25000,
       });
     }
+
     this.chatModel =
-      this.configService.get<string>('OPENAI_CHAT_MODEL') || 'gpt-3.5-turbo';
+      this.configService.get<string>('OPENAI_CHAT_MODEL') || 'gpt-4o-mini';
+    this.shortTermLimit = Math.min(
+      Math.max(
+        Number(this.configService.get<string>('AI_SHORT_TERM_MEMORY_LIMIT') || 14),
+        10,
+      ),
+      20,
+    );
+    this.ragTopK = Math.min(
+      Math.max(Number(this.configService.get<string>('RAG_TOP_K') || 5), 1),
+      8,
+    );
   }
 
   async generateResponse(
     prompt: string,
     options?: {
       history?: ConversationHistoryItem[];
+      userId?: string;
     },
   ): Promise<AiResponse> {
-    if (!prompt) {
+    if (!prompt?.trim()) {
       return {
         text: 'Por favor, escribe un mensaje.',
         contextUsed: false,
@@ -95,42 +121,42 @@ export class AiService {
       const history = (options?.history || []).filter(
         (item) => item?.content?.trim() && item.role !== 'system',
       );
-      const rag = this.shouldUseDocumentContext(prompt)
-        ? await this.documentsRagService.retrieveRelevantContext(prompt, 3)
-        : {
-            chunks: [],
-            contextUsed: false,
-            retrievalMode: 'none',
-          };
-      const contextBlock = rag.chunks
-        .map(
-          (chunk, index) =>
-            `[Fuente ${index + 1} | ${chunk.documentTitle} | chunk ${chunk.chunkIndex}]\n${chunk.text}`,
-        )
-        .join('\n\n');
+      const [rag, longTermContext] = await Promise.all([
+        this.documentsRagService.retrieveRelevantContext(prompt, this.ragTopK, {
+          ownerTypes: options?.userId ? ['admin', 'user'] : ['admin'],
+          userId: options?.userId,
+          includeGlobalAdmin: true,
+        }),
+        this.buildLongTermContext(options?.userId),
+      ]);
 
-      const systemMessage = rag.contextUsed
-        ? `Eres un asistente de apoyo emocional amable y empatico. Mantienes continuidad con el historial reciente y respondes de forma coherente con lo ya hablado.\n\nSi la pregunta toca informacion interna o factual, usa solo el contexto documental recuperado. No inventes politicas, procesos, nombres, cifras, diagnosticos ni instrucciones que no aparezcan ahi. Si el contexto no alcanza para responder con certeza, dilo con claridad y pide al usuario que comparta mas detalle o que un administrador cargue/publice mejor la documentacion.\n\nCuando el usuario pida apoyo emocional general, responde con cercania, claridad y pasos concretos breves. Cuando uses informacion documental, integrala de forma natural y menciona la fuente por su titulo si ayuda.\n\nContexto documental:\n${contextBlock}`
-        : 'Eres un asistente de apoyo emocional amable y empatico. Mantienes continuidad con el historial reciente y no inventas datos factuales o internos. Si el usuario pide informacion especifica que dependa de documentacion interna y no tienes contexto suficiente, dilo claramente.';
+      const recentHistory = history.slice(-this.shortTermLimit);
+      const crisisMode = this.containsRiskLanguage(prompt);
+      const systemMessage = this.buildSystemPrompt({
+        rag,
+        longTermContext,
+        crisisMode,
+      });
 
       const messages: Array<{
         role: 'system' | 'user' | 'assistant';
         content: string;
       }> = [{ role: 'system', content: systemMessage }];
 
-      history.slice(-10).forEach((item) => {
+      recentHistory.forEach((item) => {
         messages.push({
           role: item.role === 'assistant' ? 'assistant' : 'user',
           content: item.content,
         });
       });
 
-      messages.push({ role: 'user', content: prompt });
+      messages.push({ role: 'user', content: prompt.trim() });
 
       const completion = await this.openai.chat.completions.create({
         model: this.chatModel,
         messages,
-        max_tokens: 180,
+        max_tokens: crisisMode ? 260 : 220,
+        temperature: 0.6,
       });
 
       return {
@@ -143,11 +169,14 @@ export class AiService {
           documentId: chunk.documentId,
           documentTitle: chunk.documentTitle,
           chunkIndex: chunk.chunkIndex,
+          totalChunks: chunk.totalChunks,
           score: Number(chunk.score.toFixed(4)),
           excerpt:
             chunk.text.length > 280
               ? `${chunk.text.slice(0, 280)}...`
               : chunk.text,
+          sourceFileName: chunk.sourceFileName,
+          sourceType: chunk.sourceType,
         })),
       };
     } catch (error: unknown) {
@@ -197,15 +226,21 @@ export class AiService {
     await this.raisePrivacySafeRiskAlert(userId, finalChatId, cleanMessage);
 
     const recentHistory = finalChatId
-      ? await this.messagesService.findRecentByChatId(finalChatId, 10)
+      ? await this.messagesService.findRecentByChatId(
+          finalChatId,
+          this.shortTermLimit,
+        )
       : [];
+
     const userMessage = await this.messagesService.create({
       chatId: finalChatId,
       senderId: userId,
       role: 'user',
       content: cleanMessage,
     });
+
     const aiResult = await this.generateResponse(cleanMessage, {
+      userId,
       history: recentHistory
         .filter((item) => item.content?.trim())
         .map((item) => ({
@@ -216,15 +251,28 @@ export class AiService {
           content: item.content,
         })),
     });
+
     const assistantMessage = await this.messagesService.create({
       chatId: finalChatId,
       senderId: userId,
       role: 'assistant',
       content: aiResult.text,
+      metadata: {
+        contextUsed: aiResult.contextUsed,
+        retrievalMode: aiResult.retrievalMode,
+        sources: aiResult.sources.map((source) => ({
+          documentId: source.documentId,
+          documentTitle: source.documentTitle,
+          chunkIndex: source.chunkIndex,
+          score: source.score,
+        })),
+      },
     });
 
     await this.chatsService.incrementMessageCount(finalChatId);
     await this.chatsService.incrementMessageCount(finalChatId);
+
+    void this.refreshLongTermMemory(userId, cleanMessage, aiResult.text);
 
     return {
       chat: this.serializeChat(chatRecord),
@@ -238,14 +286,166 @@ export class AiService {
     };
   }
 
-  private shouldUseDocumentContext(prompt: string) {
-    const normalizedPrompt = prompt.trim().toLowerCase();
+  private buildSystemPrompt({
+    rag,
+    longTermContext,
+    crisisMode,
+  }: {
+    rag: Awaited<ReturnType<DocumentsRagService['retrieveRelevantContext']>>;
+    longTermContext: string;
+    crisisMode: boolean;
+  }) {
+    const documentContext = rag.chunks.length
+      ? rag.chunks
+          .map(
+            (chunk, index) =>
+              `[Fuente ${index + 1} | ${chunk.documentTitle} | archivo: ${chunk.sourceFileName || 'sin-archivo'} | chunk ${chunk.chunkIndex + 1}/${chunk.totalChunks}]\n${chunk.text}`,
+          )
+          .join('\n\n')
+      : 'Sin documentos relevantes recuperados.';
 
-    if (!normalizedPrompt) {
-      return false;
+    const crisisInstructions = crisisMode
+      ? `El ultimo mensaje sugiere posible crisis o riesgo de autolesion. Responde con tono calmado, directo y humano. Prioriza seguridad inmediata, invita a contactar una persona de confianza o servicios de emergencia/locales, y deja claro que no sustituyes ayuda profesional. No uses tono frio ni burocratico.`
+      : '';
+
+    return [
+      'Eres MenteAmiga, un asistente de apoyo emocional para salud emocional.',
+      'Responde con empatia, honestidad y utilidad practica.',
+      'Nunca inventes hechos, politicas, diagnosticos, nombres, resultados ni contenido documental.',
+      'Si no hay contexto suficiente para responder una parte, dilo claramente.',
+      'No sustituyes atencion medica, psiquiatrica ni psicologica profesional.',
+      'Si usas informacion documental, menciona la fuente por titulo o archivo de forma natural.',
+      'No conviertas memoria corta o larga en verdad absoluta: usala como contexto orientativo.',
+      crisisInstructions,
+      longTermContext ? `Memoria larga util y segura:\n${longTermContext}` : '',
+      `Contexto documental RAG:\n${documentContext}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  private async buildLongTermContext(userId?: string) {
+    if (!userId) {
+      return '';
     }
 
-    return DOCUMENT_CONTEXT_KEYWORD_REGEX.test(normalizedPrompt);
+    try {
+      const [profile, memories] = await Promise.all([
+        this.profilesService.findByUserId(userId),
+        this.userMemoriesService.listActiveByUser(userId, 5),
+      ]);
+
+      const fragments: string[] = [];
+
+      if (profile) {
+        if (profile.displayName) {
+          fragments.push(`Nombre preferido: ${profile.displayName}.`);
+        }
+        if (profile.bio) {
+          fragments.push(`Bio breve: ${String(profile.bio).trim()}.`);
+        }
+        const goals = Array.isArray(profile.onboardingData?.goals)
+          ? profile.onboardingData.goals.filter(Boolean).slice(0, 3)
+          : [];
+        if (goals.length) {
+          fragments.push(`Objetivos declarados: ${goals.join(', ')}.`);
+        }
+        const recentCheckIn = Array.isArray(profile.checkIns)
+          ? profile.checkIns[profile.checkIns.length - 1]
+          : null;
+        if (recentCheckIn?.mood) {
+          fragments.push(
+            `Ultimo check-in conocido: estado ${recentCheckIn.mood}${recentCheckIn.energy ? `, energia ${recentCheckIn.energy}` : ''}.`,
+          );
+        }
+      }
+
+      memories.forEach((memory) => {
+        if (memory?.summary) {
+          fragments.push(`Memoria ${memory.type}: ${memory.summary}`);
+        }
+      });
+
+      return fragments.join('\n');
+    } catch (error: unknown) {
+      this.logger.warn(
+        `No se pudo construir memoria larga del usuario: ${
+          error instanceof Error ? error.message : 'unknown'
+        }`,
+      );
+      return '';
+    }
+  }
+
+  private async refreshLongTermMemory(
+    userId: string,
+    userMessage: string,
+    assistantMessage: string,
+  ) {
+    if (!this.openai || !this.userMemoriesService.isEnabled()) {
+      return;
+    }
+
+    if (this.containsRiskLanguage(userMessage) || userMessage.length < 30) {
+      return;
+    }
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        model: this.chatModel,
+        temperature: 0,
+        max_tokens: 140,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Analiza el ultimo intercambio y decide si conviene guardar una memoria larga segura. Guarda solo preferencias, metas, estrategias de afrontamiento o contexto de apoyo estables. No guardes datos clinicos sensibles, crisis, ideacion suicida, detalles sexuales, financieros o identificadores innecesarios. Responde SOLO JSON con claves shouldStore, type, summary, confidence.',
+          },
+          {
+            role: 'user',
+            content: `Mensaje usuario: ${userMessage}\nRespuesta asistente: ${assistantMessage}`,
+          },
+        ],
+      });
+
+      const raw = completion.choices[0]?.message?.content || '';
+      const parsed = this.parseMemorySuggestion(raw);
+      if (!parsed.shouldStore || !parsed.summary || !parsed.type) {
+        return;
+      }
+
+      await this.userMemoriesService.createOrRefresh(userId, {
+        type: parsed.type,
+        summary: parsed.summary,
+        source: 'chat',
+        confidence: Number(parsed.confidence ?? 0.6),
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        `No se pudo actualizar memoria larga: ${
+          error instanceof Error ? error.message : 'unknown'
+        }`,
+      );
+    }
+  }
+
+  private parseMemorySuggestion(raw: string): MemorySuggestion {
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start < 0 || end <= start) {
+      return {};
+    }
+
+    try {
+      const parsed = JSON.parse(raw.slice(start, end + 1)) as MemorySuggestion;
+      const summary = String(parsed.summary || '').trim();
+      if (summary.length > 220) {
+        parsed.summary = `${summary.slice(0, 217)}...`;
+      }
+      return parsed;
+    } catch {
+      return {};
+    }
   }
 
   private serializeChat(chat: unknown) {

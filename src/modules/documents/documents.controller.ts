@@ -120,7 +120,16 @@ export class DocumentsController {
       processingStatus: document.processingStatus,
       processingError: document.processingError || '',
       indexingStatus: document.indexingStatus,
+      indexingError: document.indexingError || document.ragError || '',
+      lastIndexedAt: document.lastIndexedAt || null,
+      ragEnabled: document.ragEnabled,
+      ragError: document.ragError || '',
     };
+  }
+
+  @Get(':id/chunks')
+  async getChunks(@Param('id') id: string) {
+    return this.documentsService.findChunks(id);
   }
 
   @Get(':id/download')
@@ -195,10 +204,29 @@ export class DocumentsController {
       resourceType: 'raw',
     });
 
-    return this.documentsService.createFromUpload(payload, {
-      ...file,
-      ...storedFile,
-    });
+    const document = await this.documentsService.createFromUpload(
+      payload,
+      {
+        ...file,
+        ...storedFile,
+      },
+      { scheduleProcessing: false },
+    );
+    const processed = await this.documentsProcessingService.processDocument(
+      document.id,
+      'full',
+    );
+
+    return {
+      ok: true,
+      document: processed,
+      rag: {
+        indexed:
+          processed?.indexingStatus === 'completed' &&
+          processed?.ragEnabled !== false,
+        chunksCreated: Number(processed?.chunkCount || 0),
+      },
+    };
   }
 
   @Put(':id')
@@ -217,6 +245,18 @@ export class DocumentsController {
       payload.extractionStatus || 'completed',
       payload.extractionError || '',
     );
+  }
+
+  @Put(':id/rag-status')
+  async updateRagStatus(
+    @Param('id') id: string,
+    @Body('enabled') enabled: boolean,
+  ) {
+    if (typeof enabled !== 'boolean') {
+      throw new BadRequestException('enabled debe ser boolean');
+    }
+
+    return this.documentsService.setRagEnabled(id, enabled);
   }
 
   @Put(':id/upload')
@@ -245,10 +285,30 @@ export class DocumentsController {
       resourceType: 'raw',
     });
 
-    return this.documentsService.replaceFile(id, payload, {
-      ...file,
-      ...storedFile,
-    });
+    const document = await this.documentsService.replaceFile(
+      id,
+      payload,
+      {
+        ...file,
+        ...storedFile,
+      },
+      { scheduleProcessing: false },
+    );
+    const processed = await this.documentsProcessingService.processDocument(
+      document.id,
+      'full',
+    );
+
+    return {
+      ok: true,
+      document: processed,
+      rag: {
+        indexed:
+          processed?.indexingStatus === 'completed' &&
+          processed?.ragEnabled !== false,
+        chunksCreated: Number(processed?.chunkCount || 0),
+      },
+    };
   }
 
   @Delete(':id')

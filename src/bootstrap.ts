@@ -9,6 +9,12 @@ import { AppModule } from './app.module';
 
 const bootstrapLogger = new Logger('Bootstrap');
 const rejectedOrigins = new Set<string>();
+const allowedOriginsLogged = new Set<string>();
+
+const VERCEL_PREVIEW_ORIGIN_PATTERNS = [
+  /^https:\/\/frontend-super-admin-.*\.vercel\.app$/i,
+  /^https:\/\/.*-ferney21reyes-gmailcoms-projects\.vercel\.app$/i,
+];
 
 function logEnvironmentSummary(configService: ConfigService) {
   const nodeEnv = configService.get<string>('NODE_ENV') || 'development';
@@ -69,9 +75,20 @@ function logRejectedOrigin(origin: string) {
   bootstrapLogger.warn(`Rejected CORS origin: ${normalizedOrigin}`);
 }
 
+function logAllowedOrigin(origin: string, reason: string) {
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (allowedOriginsLogged.has(normalizedOrigin)) {
+    return;
+  }
+
+  allowedOriginsLogged.add(normalizedOrigin);
+  bootstrapLogger.log(`Allowed CORS origin (${reason}): ${normalizedOrigin}`);
+}
+
 function isAllowedVercelPreview(origin: string) {
   try {
-    const { protocol, hostname } = new URL(origin);
+    const normalizedOrigin = normalizeOrigin(origin);
+    const { protocol, hostname } = new URL(normalizedOrigin);
 
     if (protocol !== 'https:') {
       return false;
@@ -85,7 +102,10 @@ function isAllowedVercelPreview(origin: string) {
       hostname === 'frontend-usuario.vercel.app' ||
       hostname === 'frontend-super-admin.vercel.app' ||
       hostname.startsWith('frontend-usuario-') ||
-      hostname.startsWith('frontend-super-admin-')
+      hostname.startsWith('frontend-super-admin-') ||
+      VERCEL_PREVIEW_ORIGIN_PATTERNS.some((pattern) =>
+        pattern.test(normalizedOrigin),
+      )
     );
   } catch {
     return false;
@@ -154,23 +174,30 @@ function applyAppConfiguration(
     new Set([...defaultOrigins, ...configuredOrigins]),
   );
 
-  const isOriginAllowed = (origin?: string | null) => {
+  const evaluateOrigin = (origin?: string | null) => {
     if (!origin) {
-      return true;
+      return { allowed: true, reason: 'same-origin-or-server-client' };
     }
 
     const normalizedOrigin = normalizeOrigin(origin);
-    return (
-      allowedOrigins.has(normalizedOrigin) ||
-      isAllowedVercelPreview(normalizedOrigin)
-    );
+    if (allowedOrigins.has(normalizedOrigin)) {
+      return { allowed: true, reason: 'configured-allowlist' };
+    }
+
+    if (isAllowedVercelPreview(normalizedOrigin)) {
+      return { allowed: true, reason: 'vercel-preview-pattern' };
+    }
+
+    return { allowed: false, reason: 'not-allowed' };
   };
 
   app.use((req: Request, res: Response, next: NextFunction) => {
     const requestOrigin =
       typeof req.headers.origin === 'string' ? req.headers.origin : '';
+    const originEvaluation = evaluateOrigin(requestOrigin);
 
-    if (requestOrigin && isOriginAllowed(requestOrigin)) {
+    if (requestOrigin && originEvaluation.allowed) {
+      logAllowedOrigin(requestOrigin, originEvaluation.reason);
       res.header('Access-Control-Allow-Origin', requestOrigin);
       res.header('Vary', 'Origin');
       res.header('Access-Control-Allow-Credentials', 'true');
@@ -183,11 +210,16 @@ function applyAppConfiguration(
         'Content-Type, Authorization, Accept, Origin, X-Requested-With',
       );
     }
-    if (requestOrigin && !isOriginAllowed(requestOrigin)) {
+    if (requestOrigin && !originEvaluation.allowed) {
       logRejectedOrigin(requestOrigin);
     }
 
     if (req.method === 'OPTIONS') {
+      if (requestOrigin && !originEvaluation.allowed) {
+        res.sendStatus(403);
+        return;
+      }
+
       res.sendStatus(204);
       return;
     }
@@ -197,7 +229,15 @@ function applyAppConfiguration(
 
   app.enableCors({
     origin: (origin, callback) => {
-      callback(null, isOriginAllowed(origin));
+      const originEvaluation = evaluateOrigin(origin);
+      if (origin && originEvaluation.allowed) {
+        logAllowedOrigin(origin, originEvaluation.reason);
+      }
+      if (origin && !originEvaluation.allowed) {
+        logRejectedOrigin(origin);
+      }
+
+      callback(null, originEvaluation.allowed);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

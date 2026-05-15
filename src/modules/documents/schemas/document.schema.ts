@@ -3,6 +3,22 @@ import { Document as MongooseDocument } from 'mongoose';
 
 @Schema({ timestamps: true })
 export class AdminDocument extends MongooseDocument {
+  @Prop({
+    type: String,
+    enum: ['admin', 'user', 'system'],
+    default: 'admin',
+  })
+  ownerType: string;
+
+  @Prop({ default: null, index: true })
+  tenantId?: string | null;
+
+  @Prop({ default: null, index: true })
+  organizationId?: string | null;
+
+  @Prop({ default: null, index: true })
+  userId?: string | null;
+
   @Prop({ required: true })
   title: string;
 
@@ -111,6 +127,12 @@ export class AdminDocument extends MongooseDocument {
     default: 'not_indexed',
   })
   indexingStatus: string;
+
+  @Prop({ default: true })
+  ragEnabled: boolean;
+
+  @Prop({ default: '' })
+  ragError?: string;
 
   @Prop({ default: 0 })
   chunkCount: number;

@@ -14,6 +14,7 @@ import {
   AdminDocumentSchema,
 } from './schemas/document.schema';
 import { StorageModule } from '../../common/storage/storage.module';
+import { RagController } from './rag.controller';
 
 @Module({
   imports: [
@@ -23,7 +24,7 @@ import { StorageModule } from '../../common/storage/storage.module';
       { name: DocumentChunk.name, schema: DocumentChunkSchema },
     ]),
   ],
-  controllers: [DocumentsController],
+  controllers: [DocumentsController, RagController],
   providers: [
     DocumentsService,
     DocumentsRagService,

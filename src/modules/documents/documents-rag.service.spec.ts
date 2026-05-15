@@ -33,13 +33,15 @@ describe('DocumentsRagService', () => {
           category: 'faq',
           version: '1.0.0',
           content: 'Contenido estable para validar reindexado.',
+          ragEnabled: true,
         }),
       ),
       findByIdAndUpdate: jest.fn(() => queryResult({ _id: documentId })),
     };
     const chunkModel = {
       deleteMany: jest.fn(() => queryResult({ deletedCount: 1 })),
-      insertMany: jest.fn(),
+      bulkWrite: jest.fn(),
+      updateMany: jest.fn(() => queryResult({ modifiedCount: 0 })),
     };
     const service = new DocumentsRagService(
       createConfigService(),
@@ -60,7 +62,7 @@ describe('DocumentsRagService', () => {
       'embedding failed',
     );
     expect(chunkModel.deleteMany).not.toHaveBeenCalled();
-    expect(chunkModel.insertMany).not.toHaveBeenCalled();
+    expect(chunkModel.bulkWrite).not.toHaveBeenCalled();
   });
 
   it('does not delete existing chunks when replacing the new index batch fails', async () => {
@@ -74,6 +76,7 @@ describe('DocumentsRagService', () => {
           category: 'faq',
           version: '1.0.0',
           content: 'Respirar lento ayuda durante ansiedad y miedo intenso.',
+          ragEnabled: true,
         }),
       ),
       findByIdAndUpdate: jest.fn(() => queryResult({ _id: documentId })),
@@ -81,6 +84,7 @@ describe('DocumentsRagService', () => {
     const chunkModel = {
       deleteMany: jest.fn(() => queryResult({ deletedCount: 1 })),
       bulkWrite: jest.fn().mockRejectedValue(new Error('write failed')),
+      updateMany: jest.fn(() => queryResult({ modifiedCount: 0 })),
     };
     const service = new DocumentsRagService(
       createConfigService(),
@@ -106,16 +110,22 @@ describe('DocumentsRagService', () => {
     const documentId = new Types.ObjectId();
     const documentModel = {};
     const chunkModel = {
+      aggregate: jest.fn().mockRejectedValue(new Error('atlas unavailable')),
       find: jest.fn(() =>
         queryResult([
           {
             documentId,
-            documentTitle: 'Respiracion',
+            ownerType: 'admin',
+            title: 'Respiracion',
+            sourceFileName: 'respiracion.pdf',
+            sourceType: 'pdf',
             chunkIndex: 0,
+            totalChunks: 1,
             text: 'La respiracion diafragmatica ayuda a regular ansiedad.',
             documentStatus: 'published',
             retrievalMode: 'semantic',
             embedding: [0.98, 0.02],
+            isActive: true,
           },
         ]),
       ),
@@ -140,7 +150,6 @@ describe('DocumentsRagService', () => {
 
     expect(result.contextUsed).toBe(true);
     expect(result.retrievalMode).toBe('local_semantic');
-    expect(result.configuredRetrievalMode).toBe('local_semantic');
     expect(result.chunks[0]?.documentTitle).toBe('Respiracion');
   });
 
@@ -151,9 +160,13 @@ describe('DocumentsRagService', () => {
       aggregate: jest.fn().mockResolvedValue([
         {
           documentId,
-          documentTitle: 'Ansiedad',
+          title: 'Ansiedad',
           chunkIndex: 0,
+          totalChunks: 1,
           text: 'Tecnicas de respiracion para manejo emocional.',
+          sourceFileName: 'ansiedad.pdf',
+          sourceType: 'pdf',
+          ownerType: 'admin',
           score: 0.91,
         },
       ]),
@@ -196,15 +209,21 @@ describe('DocumentsRagService', () => {
     const documentId = new Types.ObjectId();
     const documentModel = {};
     const chunkModel = {
+      aggregate: jest.fn().mockRejectedValue(new Error('atlas unavailable')),
       find: jest.fn(() =>
         queryResult([
           {
             documentId,
-            documentTitle: 'Acentos',
+            ownerType: 'admin',
+            title: 'Acentos',
+            sourceFileName: '',
+            sourceType: 'manual',
             chunkIndex: 0,
+            totalChunks: 1,
             text: 'La emoción, la niñez, la depresión y la acción importan.',
             documentStatus: 'published',
             retrievalMode: 'keyword',
+            isActive: true,
           },
         ]),
       ),

@@ -17,6 +17,8 @@ const OPTIONAL_NUMBER_VARIABLES = [
   'PREMIUM_MONTHLY_LIMIT',
   'THROTTLE_TTL_MS',
   'THROTTLE_LIMIT',
+  'AI_SHORT_TERM_MEMORY_LIMIT',
+  'RAG_TOP_K',
 ] as const;
 
 const OPTIONAL_VARIABLES = [
@@ -40,11 +42,13 @@ const OPTIONAL_VARIABLES = [
   'TWILIO_ACCOUNT_SID',
   'TWILIO_AUTH_TOKEN',
   'TWILIO_FROM_NUMBER',
+  'ENABLE_USER_MEMORY',
 ] as const;
 
 const OPTIONAL_BOOLEAN_VARIABLES = [
   'ENFORCE_HTTPS',
   'ENABLE_PUBLIC_UPLOADS',
+  'ENABLE_USER_MEMORY',
 ] as const;
 
 function requireNonEmpty(env: EnvironmentVariables, key: string) {

@@ -1,3 +1,6 @@
+/// <reference types="jest" />
+
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { ConfigService } from '@nestjs/config';
 import { DocumentsProcessingService } from './documents-processing.service';
 

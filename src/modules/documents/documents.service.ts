@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { AdminDocument } from './schemas/document.schema';
+import { DocumentChunk } from './schemas/document-chunk.schema';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
@@ -34,6 +35,11 @@ export type SerializedAdminDocument = LeanAdminDocument & {
   extractedTextAvailable: boolean;
   systemStatus: string;
   lastUpdated: Date | string | null;
+  indexingError?: string;
+};
+
+type DocumentMutationOptions = {
+  scheduleProcessing?: boolean;
 };
 
 export type UploadedStoredDocumentFile = {
@@ -62,6 +68,8 @@ export class DocumentsService {
   constructor(
     @InjectModel(AdminDocument.name)
     private documentModel: Model<AdminDocument>,
+    @InjectModel(DocumentChunk.name)
+    private readonly chunkModel: Model<DocumentChunk>,
     private readonly documentsProcessingService: DocumentsProcessingService,
     private readonly storageService: StorageService,
   ) {}
@@ -148,9 +156,40 @@ export class DocumentsService {
     };
   }
 
+  async findChunks(id: string) {
+    const document = await this.documentModel.findById(id).lean().exec();
+
+    if (!document) {
+      throw new NotFoundException('Documento no encontrado');
+    }
+
+    const chunks = await this.chunkModel
+      .find({ documentId: new Types.ObjectId(id) })
+      .sort({ chunkIndex: 1 })
+      .lean()
+      .exec();
+
+    return {
+      document: this.serialize(document as LeanAdminDocument),
+      chunks: chunks.map((chunk) => ({
+        id: String(chunk._id || ''),
+        chunkIndex: Number(chunk.chunkIndex || 0),
+        totalChunks: Number(chunk.totalChunks || 0),
+        text: String(chunk.text || ''),
+        sourceFileName: String(chunk.sourceFileName || ''),
+        sourceType: String(chunk.sourceType || ''),
+        ownerType: String(chunk.ownerType || 'admin'),
+        isActive: chunk.isActive !== false,
+        metadata: chunk.metadata || {},
+      })),
+    };
+  }
+
   async create(payload: CreateDocumentDto) {
     const document = new this.documentModel({
       ...payload,
+      ownerType: 'admin',
+      ragEnabled: true,
       sourceType: 'manual',
       status: payload.status || 'published',
       extractionStatus: 'not_required',
@@ -168,8 +207,11 @@ export class DocumentsService {
   async createFromUpload(
     payload: UploadDocumentDto,
     file: UploadedStoredDocumentFile,
+    options: DocumentMutationOptions = {},
   ) {
     const document = new this.documentModel({
+      ownerType: 'admin',
+      ragEnabled: true,
       title: payload.title || this.fileNameWithoutExtension(file.originalname),
       category: payload.category || 'terms',
       status: payload.status || 'published',
@@ -195,17 +237,29 @@ export class DocumentsService {
     });
 
     const saved = await document.save();
-    await this.documentsProcessingService.scheduleProcessing(
-      getSavedDocumentId(saved),
-      'full',
-    );
-    const queued = await this.documentModel.findById(saved._id).lean().exec();
-    return this.serialize((queued || saved.toObject()) as LeanAdminDocument);
+    if (options.scheduleProcessing !== false) {
+      await this.documentsProcessingService.scheduleProcessing(
+        getSavedDocumentId(saved),
+        'full',
+      );
+    }
+
+    const created = await this.documentModel.findById(saved._id).lean().exec();
+    return this.serialize((created || saved.toObject()) as LeanAdminDocument);
   }
 
   async update(id: string, payload: UpdateDocumentDto) {
     const updated = await this.documentModel
-      .findByIdAndUpdate(id, { $set: payload }, { new: true })
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            ...payload,
+            ...(payload.status === 'archived' ? { ragEnabled: false } : {}),
+          },
+        },
+        { new: true },
+      )
       .lean()
       .exec();
 
@@ -222,6 +276,7 @@ export class DocumentsService {
     id: string,
     payload: UploadDocumentDto,
     file: UploadedStoredDocumentFile,
+    options: DocumentMutationOptions = {},
   ) {
     const existing = await this.documentModel.findById(id).lean().exec();
     if (!existing) {
@@ -260,6 +315,7 @@ export class DocumentsService {
             extractedTextLength: 0,
             uploadedAt: new Date(),
             processingStatus: 'uploaded',
+            ragError: '',
           },
         },
         { new: true },
@@ -271,9 +327,37 @@ export class DocumentsService {
       throw new NotFoundException('Documento no encontrado');
     }
 
-    await this.documentsProcessingService.scheduleProcessing(id, 'full');
+    if (options.scheduleProcessing !== false) {
+      await this.documentsProcessingService.scheduleProcessing(id, 'full');
+    }
     const queued = await this.documentModel.findById(id).lean().exec();
     return this.serialize((queued || updated) as LeanAdminDocument);
+  }
+
+  async setRagEnabled(id: string, enabled: boolean) {
+    const updated = await this.documentModel
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            ragEnabled: enabled,
+            ragError: '',
+          },
+        },
+        { new: true },
+      )
+      .lean()
+      .exec();
+
+    if (!updated) {
+      throw new NotFoundException('Documento no encontrado');
+    }
+
+    if (enabled) {
+      await this.documentsProcessingService.scheduleProcessing(id, 'reindex');
+    }
+
+    return this.serialize(updated as LeanAdminDocument);
   }
 
   async remove(id: string) {
@@ -286,6 +370,9 @@ export class DocumentsService {
     }
 
     await this.deleteStoredFile(deleted as LeanAdminDocument);
+    await this.chunkModel
+      .deleteMany({ documentId: new Types.ObjectId(id) })
+      .exec();
     return { deleted: true };
   }
 
@@ -323,6 +410,7 @@ export class DocumentsService {
       extractedTextAvailable: !!document.extractedText,
       systemStatus,
       lastUpdated: document.updatedAt || null,
+      indexingError: String(document.ragError || ''),
     };
   }
 

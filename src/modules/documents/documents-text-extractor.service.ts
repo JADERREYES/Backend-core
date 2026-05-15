@@ -21,6 +21,7 @@ type PdfParseModule = {
 };
 
 const NULL_CHARACTER = String.fromCharCode(0);
+const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
 
 @Injectable()
 export class DocumentsTextExtractorService {
@@ -33,6 +34,23 @@ export class DocumentsTextExtractorService {
     mimeType?: string,
   ): Promise<ExtractionResult> {
     const fileBuffer = await this.storageService.read(filePath);
+
+    if (!fileBuffer.length) {
+      return {
+        text: '',
+        status: 'failed',
+        error: 'El archivo esta vacio y no se puede indexar',
+      };
+    }
+
+    if (fileBuffer.length > MAX_DOCUMENT_BYTES) {
+      return {
+        text: '',
+        status: 'failed',
+        error: 'El archivo supera el tamano maximo permitido para indexacion',
+      };
+    }
+
     const extension = extname(filePath).toLowerCase();
 
     if (mimeType === 'application/pdf' || extension === '.pdf') {
@@ -67,8 +85,18 @@ export class DocumentsTextExtractorService {
   private async extractDocxText(fileBuffer: Buffer): Promise<ExtractionResult> {
     try {
       const parsed = await mammoth.extractRawText({ buffer: fileBuffer });
+      const text = this.normalizeText(parsed.value || '');
+
+      if (!text) {
+        return {
+          text: '',
+          status: 'failed',
+          error: 'El archivo no contiene texto util para indexacion',
+        };
+      }
+
       return {
-        text: this.normalizeText(parsed.value || ''),
+        text,
         status: 'completed',
         error: '',
       };
@@ -142,8 +170,17 @@ export class DocumentsTextExtractorService {
     }
 
     try {
+      const text = await parsePdfText(fileBuffer);
+      if (!text) {
+        return {
+          text: '',
+          status: 'failed',
+          error: 'El PDF no contiene texto extraible o esta compuesto solo por imagenes',
+        };
+      }
+
       return {
-        text: await parsePdfText(fileBuffer),
+        text,
         status: 'completed',
         error: '',
       };
