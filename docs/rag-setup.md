@@ -27,6 +27,14 @@ REDIS_URL=
 Coleccion: `documentchunks`  
 Indice: `vector_index`
 
+Importante:
+
+- el backend lee el nombre del indice desde `MONGODB_ATLAS_VECTOR_INDEX`
+- si esa variable no existe, el modo configurado no sera `atlas_vector`
+- en ese caso el sistema cae a `local_semantic`
+
+## JSON minimo solicitado para Atlas
+
 ```json
 {
   "fields": [
@@ -38,15 +46,44 @@ Indice: `vector_index`
     },
     {
       "type": "filter",
-      "path": "tenantId"
+      "path": "documentId"
     },
     {
       "type": "filter",
-      "path": "organizationId"
+      "path": "status"
     },
     {
       "type": "filter",
-      "path": "userId"
+      "path": "category"
+    }
+  ]
+}
+```
+
+## JSON recomendado para el esquema actual de MenteAmiga
+
+El backend actual filtra por `documentStatus`, `ownerType` e `isActive`, por lo que esta version encaja mejor con el schema real de `documentchunks`:
+
+```json
+{
+  "fields": [
+    {
+      "type": "vector",
+      "path": "embedding",
+      "numDimensions": 1536,
+      "similarity": "cosine"
+    },
+    {
+      "type": "filter",
+      "path": "documentId"
+    },
+    {
+      "type": "filter",
+      "path": "documentStatus"
+    },
+    {
+      "type": "filter",
+      "path": "documentCategory"
     },
     {
       "type": "filter",

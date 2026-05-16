@@ -126,9 +126,10 @@ export class DocumentsRagService {
     this.embeddingModel =
       this.configService.get<string>('OPENAI_EMBEDDING_MODEL') ||
       'text-embedding-3-small';
-    this.atlasVectorIndex =
-      this.configService.get<string>('MONGODB_ATLAS_VECTOR_INDEX') ||
-      'vector_index';
+    const configuredVectorIndex = this.configService
+      .get<string>('MONGODB_ATLAS_VECTOR_INDEX')
+      ?.trim();
+    this.atlasVectorIndex = configuredVectorIndex || undefined;
 
     const openAiApiKey = this.configService.get<string>('OPENAI_API_KEY');
     if (openAiApiKey) {
@@ -504,12 +505,15 @@ export class DocumentsRagService {
       embeddingModel: this.openai ? this.embeddingModel : '',
       atlasVectorIndexConfigured: !!this.atlasVectorIndex,
       atlasVectorIndex: this.atlasVectorIndex || '',
+      vectorIndexName: this.atlasVectorIndex || '',
       atlasVectorStatus: this.atlasVectorStatus,
       atlasVectorIndexUsable: this.atlasVectorStatus === 'usable',
+      vectorIndexDetected: this.atlasVectorStatus === 'usable',
       semanticChunksAvailable: semanticChunks > 0,
       configuredRetrievalMode: this.getConfiguredRetrievalMode(),
       observedRetrievalMode: this.lastRetrievalMode,
       effectiveRetrievalMode: this.lastRetrievalMode,
+      effectiveMode: this.lastRetrievalMode,
       lastRetrievalMode: this.lastRetrievalMode,
       lastRetrievalAt: this.lastRetrievalAt,
       lastAtlasVectorError: this.lastAtlasVectorError,

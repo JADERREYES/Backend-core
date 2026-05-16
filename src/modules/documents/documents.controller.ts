@@ -4,6 +4,8 @@ import {
   Controller,
   Delete,
   Get,
+  InternalServerErrorException,
+  Logger,
   Param,
   ParseFilePipe,
   Post,
@@ -11,6 +13,7 @@ import {
   Query,
   Res,
   UploadedFile,
+  UseFilters,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
@@ -29,6 +32,11 @@ import { UpdateExtractedTextDto } from './dto/update-extracted-text.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { StorageService } from '../../common/storage/storage.service';
+import {
+  CurrentUser,
+  type CurrentUserPayload,
+} from '../../common/decorators/current-user.decorator';
+import { DocumentsUploadExceptionFilter } from './documents-upload-exception.filter';
 
 const ALLOWED_MIME_TYPES = [
   'application/pdf',
@@ -36,6 +44,7 @@ const ALLOWED_MIME_TYPES = [
 ];
 
 const ALLOWED_EXTENSIONS = ['.pdf', '.docx'];
+const MAX_UPLOAD_FILE_SIZE_BYTES = 15 * 1024 * 1024;
 
 type MulterCallback = (error: Error | null, acceptFile: boolean) => void;
 type UploadedDocumentFile = {
@@ -67,6 +76,8 @@ const validateDocumentUpload = (
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('superadmin')
 export class DocumentsController {
+  private readonly logger = new Logger(DocumentsController.name);
+
   constructor(
     private readonly documentsService: DocumentsService,
     private readonly documentsProcessingService: DocumentsProcessingService,
@@ -180,11 +191,12 @@ export class DocumentsController {
   }
 
   @Post('upload')
+  @UseFilters(DocumentsUploadExceptionFilter)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
       fileFilter: validateDocumentUpload,
-      limits: { fileSize: 15 * 1024 * 1024 },
+      limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },
     }),
   )
   async upload(
@@ -195,38 +207,67 @@ export class DocumentsController {
     )
     file: UploadedDocumentFile,
     @Body() payload: UploadDocumentDto,
+    @CurrentUser() user: CurrentUserPayload,
   ) {
-    const storedFile = await this.storageService.upload({
-      buffer: file.buffer,
-      originalName: file.originalname,
-      mimeType: file.mimetype,
-      folder: 'documents',
-      resourceType: 'raw',
-    });
-
-    const document = await this.documentsService.createFromUpload(
-      payload,
-      {
-        ...file,
-        ...storedFile,
-      },
-      { scheduleProcessing: false },
-    );
-    const processed = await this.documentsProcessingService.processDocument(
-      document.id,
-      'full',
+    this.logger.log(
+      `Upload request start user=${user.userId} email=${user.email} role=${user.role} file=${file.originalname} mime=${file.mimetype} size=${file.size}`,
     );
 
-    return {
-      ok: true,
-      document: processed,
-      rag: {
-        indexed:
-          processed?.indexingStatus === 'completed' &&
-          processed?.ragEnabled !== false,
-        chunksCreated: Number(processed?.chunkCount || 0),
-      },
-    };
+    if (file.size > MAX_UPLOAD_FILE_SIZE_BYTES) {
+      this.logger.warn(
+        `Upload rejected by controller size user=${user.userId} file=${file.originalname} size=${file.size}`,
+      );
+      throw new BadRequestException(
+        'El archivo excede el tamano maximo permitido de 15 MB',
+      );
+    }
+
+    try {
+      const storedFile = await this.storageService.upload({
+        buffer: file.buffer,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        folder: 'documents',
+        resourceType: 'raw',
+      });
+
+      const document = await this.documentsService.createFromUpload(
+        payload,
+        {
+          ...file,
+          ...storedFile,
+        },
+        { scheduleProcessing: false },
+      );
+      const processed = await this.documentsProcessingService.processDocument(
+        document.id,
+        'full',
+      );
+
+      this.logger.log(
+        `Upload request completed user=${user.userId} documentId=${document.id} indexingStatus=${processed?.indexingStatus || 'unknown'} chunkCount=${processed?.chunkCount || 0}`,
+      );
+
+      return {
+        ok: true,
+        document: processed,
+        rag: {
+          indexed:
+            processed?.indexingStatus === 'completed' &&
+            processed?.ragEnabled !== false,
+          chunksCreated: Number(processed?.chunkCount || 0),
+        },
+      };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido en upload';
+      this.logger.error(
+        `Upload request failed user=${user.userId} file=${file.originalname} mime=${file.mimetype} size=${file.size} reason=${message}`,
+      );
+      throw new InternalServerErrorException(
+        `El archivo se recibio pero fallo el procesamiento o indexacion: ${message}`,
+      );
+    }
   }
 
   @Put(':id')
@@ -260,11 +301,12 @@ export class DocumentsController {
   }
 
   @Put(':id/upload')
+  @UseFilters(DocumentsUploadExceptionFilter)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
       fileFilter: validateDocumentUpload,
-      limits: { fileSize: 15 * 1024 * 1024 },
+      limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },
     }),
   )
   async replaceUpload(
@@ -276,39 +318,59 @@ export class DocumentsController {
     )
     file: UploadedDocumentFile,
     @Body() payload: UploadDocumentDto,
+    @CurrentUser() user: CurrentUserPayload,
   ) {
-    const storedFile = await this.storageService.upload({
-      buffer: file.buffer,
-      originalName: file.originalname,
-      mimeType: file.mimetype,
-      folder: 'documents',
-      resourceType: 'raw',
-    });
-
-    const document = await this.documentsService.replaceFile(
-      id,
-      payload,
-      {
-        ...file,
-        ...storedFile,
-      },
-      { scheduleProcessing: false },
-    );
-    const processed = await this.documentsProcessingService.processDocument(
-      document.id,
-      'full',
+    this.logger.log(
+      `Replace upload request start user=${user.userId} email=${user.email} documentId=${id} file=${file.originalname} mime=${file.mimetype} size=${file.size}`,
     );
 
-    return {
-      ok: true,
-      document: processed,
-      rag: {
-        indexed:
-          processed?.indexingStatus === 'completed' &&
-          processed?.ragEnabled !== false,
-        chunksCreated: Number(processed?.chunkCount || 0),
-      },
-    };
+    try {
+      const storedFile = await this.storageService.upload({
+        buffer: file.buffer,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        folder: 'documents',
+        resourceType: 'raw',
+      });
+
+      const document = await this.documentsService.replaceFile(
+        id,
+        payload,
+        {
+          ...file,
+          ...storedFile,
+        },
+        { scheduleProcessing: false },
+      );
+      const processed = await this.documentsProcessingService.processDocument(
+        document.id,
+        'full',
+      );
+
+      this.logger.log(
+        `Replace upload request completed user=${user.userId} documentId=${document.id} indexingStatus=${processed?.indexingStatus || 'unknown'} chunkCount=${processed?.chunkCount || 0}`,
+      );
+
+      return {
+        ok: true,
+        document: processed,
+        rag: {
+          indexed:
+            processed?.indexingStatus === 'completed' &&
+            processed?.ragEnabled !== false,
+          chunksCreated: Number(processed?.chunkCount || 0),
+        },
+      };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido en replaceUpload';
+      this.logger.error(
+        `Replace upload request failed user=${user.userId} documentId=${id} file=${file.originalname} mime=${file.mimetype} size=${file.size} reason=${message}`,
+      );
+      throw new InternalServerErrorException(
+        `El archivo se recibio pero fallo el reprocesamiento o indexacion: ${message}`,
+      );
+    }
   }
 
   @Delete(':id')
