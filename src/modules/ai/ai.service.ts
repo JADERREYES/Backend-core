@@ -57,6 +57,10 @@ type EmotionalIntent =
   | 'crisis'
   | 'general';
 
+type RetrievalContext = Awaited<
+  ReturnType<DocumentsRagService['retrieveRelevantContext']>
+>;
+
 const CRISIS_KEYWORD_REGEX =
   /\b(suicid(?:a(?:r(?:me|se)?)?|io|arme|arse)?|matarme|quitarme la vida|autoles(?:ion|ionarme)?|lesionarme|hacerme dano|hacerm[eé] da[nñ]o|no quiero vivir|quiero morir)\b/i;
 
@@ -114,6 +118,7 @@ export class AiService {
       userId?: string;
     },
   ): Promise<AiResponse> {
+    const startedAt = Date.now();
     if (!prompt?.trim()) {
       return {
         text: 'Por favor, escribe un mensaje.',
@@ -136,23 +141,44 @@ export class AiService {
     }
 
     try {
+      const cleanPrompt = prompt.trim();
+      const simpleGreeting = this.isSimpleGreeting(cleanPrompt);
+      if (simpleGreeting) {
+        return {
+          text: 'Hola, estoy aqui contigo. ¿Como te sientes hoy?',
+          contextUsed: false,
+          retrievalMode: 'none',
+          sources: [],
+        };
+      }
+
       const history = (options?.history || []).filter(
         (item) => item?.content?.trim() && item.role !== 'system',
       );
-      const [rag, longTermContext] = await Promise.all([
-        this.documentsRagService.retrieveRelevantContext(prompt, this.ragTopK, {
-          ownerTypes: options?.userId ? ['admin', 'user'] : ['admin'],
-          userId: options?.userId,
-          includeGlobalAdmin: true,
-        }),
-        this.buildLongTermContext(options?.userId),
-      ]);
-
       const recentHistory = history.slice(-this.shortTermLimit);
-      const crisisMode = this.containsRiskLanguage(prompt);
-      const intent = this.detectEmotionalIntent(prompt);
+      const crisisMode = this.containsRiskLanguage(cleanPrompt);
+      const intent = this.detectEmotionalIntent(cleanPrompt);
+      const shouldUseRag = this.shouldUseRag(intent, cleanPrompt);
+      const ragStartedAt = Date.now();
+      const [rag, longTermContext] = await Promise.all([
+        shouldUseRag
+          ? this.documentsRagService.retrieveRelevantContext(
+              cleanPrompt,
+              Math.min(this.ragTopK, 3),
+              {
+                ownerTypes: options?.userId ? ['admin', 'user'] : ['admin'],
+                userId: options?.userId,
+                includeGlobalAdmin: true,
+              },
+            )
+          : Promise.resolve(this.emptyRagContext()),
+        this.buildLongTermContext(options?.userId, {
+          includeMemories: intent !== 'general' || recentHistory.length > 0,
+        }),
+      ]);
+      const ragElapsedMs = Date.now() - ragStartedAt;
       const shouldLeadWithQuestion = this.shouldLeadWithQuestion(
-        prompt,
+        cleanPrompt,
         recentHistory,
         crisisMode,
       );
@@ -176,14 +202,16 @@ export class AiService {
         });
       });
 
-      messages.push({ role: 'user', content: prompt.trim() });
+      messages.push({ role: 'user', content: cleanPrompt });
 
+      const openAiStartedAt = Date.now();
       const completion = await this.openai.chat.completions.create({
         model: this.chatModel,
         messages,
-        max_tokens: crisisMode ? 300 : 220,
+        max_tokens: crisisMode ? 300 : 170,
         temperature: crisisMode ? 0.5 : 0.45,
       });
+      const openAiElapsedMs = Date.now() - openAiStartedAt;
 
       let responseText =
         completion.choices[0].message.content ||
@@ -212,7 +240,7 @@ export class AiService {
       }
 
       this.logger.debug(
-        `AI response generated promptLength=${prompt.trim().length} responseLength=${responseText.length} historyItems=${recentHistory.length} retrievalMode=${rag.retrievalMode} sources=${rag.chunks.length} timeoutMs=${this.chatTimeoutMs}`,
+        `AI response generated promptLength=${cleanPrompt.length} responseLength=${responseText.length} historyItems=${recentHistory.length} retrievalMode=${rag.retrievalMode} sources=${rag.chunks.length} ragMs=${ragElapsedMs} openAiMs=${openAiElapsedMs} totalMs=${Date.now() - startedAt} timeoutMs=${this.chatTimeoutMs}`,
       );
 
       return {
@@ -362,7 +390,7 @@ export class AiService {
       ? rag.chunks
           .map(
             (chunk, index) =>
-              `[Fuente ${index + 1} | ${chunk.documentTitle} | archivo: ${chunk.sourceFileName || 'sin-archivo'} | chunk ${chunk.chunkIndex + 1}/${chunk.totalChunks}]\n${chunk.text}`,
+              `[Fuente ${index + 1} | ${chunk.documentTitle} | archivo: ${chunk.sourceFileName || 'sin-archivo'} | chunk ${chunk.chunkIndex + 1}/${chunk.totalChunks}]\n${chunk.text.slice(0, 420)}`,
           )
           .join('\n\n')
       : 'Sin documentos relevantes recuperados.';
@@ -482,7 +510,10 @@ export class AiService {
     return false;
   }
 
-  private async buildLongTermContext(userId?: string) {
+  private async buildLongTermContext(
+    userId?: string,
+    options?: { includeMemories?: boolean },
+  ) {
     if (!userId) {
       return '';
     }
@@ -490,7 +521,9 @@ export class AiService {
     try {
       const [profile, memories] = await Promise.all([
         this.profilesService.findByUserId(userId),
-        this.userMemoriesService.listActiveByUser(userId, 5),
+        options?.includeMemories
+          ? this.userMemoriesService.listActiveByUser(userId, 5)
+          : Promise.resolve([]),
       ]);
 
       const fragments: string[] = [];
@@ -693,5 +726,33 @@ export class AiService {
 
   private containsRiskLanguage(message: string) {
     return CRISIS_KEYWORD_REGEX.test(message);
+  }
+
+  private isSimpleGreeting(message: string) {
+    const clean = message.trim().toLowerCase();
+    return /^(hola|holi|holaa+|buenas|buenos dias|buen dia|buenas tardes|buenas noches|hey|hello|como estas|como estas\?|gracias|muchas gracias)$/.test(
+      clean,
+    );
+  }
+
+  private shouldUseRag(intent: EmotionalIntent, message: string) {
+    if (intent === 'general') {
+      return /\b(ansiedad|triste|agotad|solo|sola|violencia|controla|estres|estr[ée]s|miedo|llorar|duelo|pareja)\b/i.test(
+        message,
+      );
+    }
+
+    return true;
+  }
+
+  private emptyRagContext(): RetrievalContext {
+    return {
+      contextUsed: false,
+      retrievalMode: 'none',
+      configuredRetrievalMode: 'none',
+      atlasVectorStatus: 'not_observed',
+      fallbackReason: 'skipped_for_lightweight_prompt',
+      chunks: [],
+    };
   }
 }

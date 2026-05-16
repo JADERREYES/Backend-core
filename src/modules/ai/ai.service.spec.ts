@@ -79,6 +79,16 @@ describe('AiService', () => {
     ).toBe(false);
   });
 
+  it('detects simple greetings for the fast response path', () => {
+    const service = createService() as unknown as {
+      isSimpleGreeting: (prompt: string) => boolean;
+    };
+
+    expect(service.isSimpleGreeting('hola')).toBe(true);
+    expect(service.isSimpleGreeting('buenas')).toBe(true);
+    expect(service.isSimpleGreeting('estoy agotado mentalmente')).toBe(false);
+  });
+
   it('classifies emotional violence prompts to guide a safer conversational style', () => {
     const service = createService() as unknown as {
       detectEmotionalIntent: (prompt: string) => string;
@@ -105,6 +115,16 @@ describe('AiService', () => {
         false,
       ),
     ).toBe(true);
+  });
+
+  it('uses rag only when the emotional intent or message warrants it', () => {
+    const service = createService() as unknown as {
+      shouldUseRag: (intent: string, message: string) => boolean;
+    };
+
+    expect(service.shouldUseRag('general', 'hola')).toBe(false);
+    expect(service.shouldUseRag('anxiety', 'estoy muy ansioso')).toBe(true);
+    expect(service.shouldUseRag('general', 'me siento muy solo hoy')).toBe(true);
   });
 
   it('builds a system prompt that enforces brevity and avoids list-like replies', () => {
