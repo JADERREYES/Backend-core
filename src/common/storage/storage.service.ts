@@ -108,11 +108,12 @@ export class StorageService {
     input: UploadToStorageInput,
   ): Promise<StoredFile> {
     const extension = extname(input.originalName).toLowerCase();
-    const safeBase = input.originalName
-      .replace(extension, '')
+    const safeBase = (input.targetBaseName || input.originalName.replace(extension, ''))
       .replace(/[^a-zA-Z0-9-_]/g, '-')
-      .slice(0, 60);
-    const fileName = `${Date.now()}-${safeBase || randomUUID()}${extension}`;
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 80);
+    const fileName = `${safeBase || randomUUID()}${extension}`;
     const targetDir = join(process.cwd(), 'uploads', input.folder);
 
     await mkdir(targetDir, { recursive: true });
@@ -140,11 +141,13 @@ export class StorageService {
     input: UploadToStorageInput,
   ): Promise<StoredFile> {
     const extension = extname(input.originalName).toLowerCase();
-    const safeBase = input.originalName
-      .replace(extension, '')
+    const safeBase = (input.targetBaseName || input.originalName.replace(extension, ''))
       .replace(/[^a-zA-Z0-9-_]/g, '-')
-      .slice(0, 60);
-    const pathname = `${input.folder}/${Date.now()}-${safeBase || randomUUID()}${extension}`;
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 80);
+    const fileName = `${safeBase || randomUUID()}${extension}`;
+    const pathname = `${input.folder}/${fileName}`;
 
     const blob = await put(pathname, input.buffer, {
       access: 'public',
@@ -159,7 +162,7 @@ export class StorageService {
       fileUrl: isSensitiveFolder(input.folder) ? '' : blob.url,
       key: isSensitiveFolder(input.folder) ? blob.url : blob.pathname,
       resourceType: input.resourceType,
-      fileName: input.originalName,
+      fileName,
       mimeType: input.mimeType,
       size: input.buffer.length,
     };

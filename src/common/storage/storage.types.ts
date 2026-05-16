@@ -8,6 +8,7 @@ export type UploadToStorageInput = {
   mimeType: string;
   folder: UploadFolder;
   resourceType: StorageResourceType;
+  targetBaseName?: string;
 };
 
 export type StoredFile = {

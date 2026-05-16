@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateCheckInDto } from './dto/create-checkin.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { extname } from 'path';
 import { StorageService } from '../../common/storage/storage.service';
 import {
   CurrentUser,
@@ -28,6 +29,63 @@ type UploadedAvatarFile = {
   originalname: string;
   mimetype: string;
   size: number;
+};
+
+const AVATAR_MAX_SIZE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_AVATAR_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+];
+const ALLOWED_AVATAR_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
+
+const normalizeAvatarExtension = (extension: string) =>
+  extension === '.jpeg' ? '.jpg' : extension;
+
+const hasValidAvatarSignature = (buffer: Buffer, extension: string) => {
+  if (!buffer?.length) {
+    return false;
+  }
+
+  const normalizedExtension = normalizeAvatarExtension(extension);
+
+  if (
+    normalizedExtension === '.png' &&
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return true;
+  }
+
+  if (
+    normalizedExtension === '.jpg' &&
+    buffer.length >= 4 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[buffer.length - 2] === 0xff &&
+    buffer[buffer.length - 1] === 0xd9
+  ) {
+    return true;
+  }
+
+  if (
+    normalizedExtension === '.webp' &&
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) {
+    return true;
+  }
+
+  return false;
 };
 
 type AvatarProfileUpdate = UpdateProfileDto & {
@@ -95,8 +153,11 @@ export class ProfilesController {
     FileInterceptor('file', {
       storage: memoryStorage(),
       fileFilter: (_req, file, cb) => {
-        const allowed = ['image/png', 'image/jpeg', 'image/webp'];
-        if (!allowed.includes(file.mimetype)) {
+        const extension = extname(file.originalname || '').toLowerCase();
+        const validMime = ALLOWED_AVATAR_MIME_TYPES.includes(file.mimetype);
+        const validExtension = ALLOWED_AVATAR_EXTENSIONS.includes(extension);
+
+        if (!validMime || !validExtension) {
           return cb(
             new BadRequestException(
               'Solo se permiten imagenes PNG, JPG o WEBP',
@@ -106,7 +167,7 @@ export class ProfilesController {
         }
         cb(null, true);
       },
-      limits: { fileSize: 5 * 1024 * 1024 },
+      limits: { fileSize: AVATAR_MAX_SIZE_BYTES },
     }),
   )
   async uploadAvatar(
@@ -117,14 +178,40 @@ export class ProfilesController {
       throw new BadRequestException('No se recibio ningun avatar');
     }
 
+    const extension = extname(file.originalname || '').toLowerCase();
+    if (!ALLOWED_AVATAR_EXTENSIONS.includes(extension)) {
+      throw new BadRequestException(
+        'La extension del avatar no es valida. Usa PNG, JPG o WEBP.',
+      );
+    }
+
+    if (!ALLOWED_AVATAR_MIME_TYPES.includes(file.mimetype)) {
+      throw new BadRequestException(
+        'El tipo de archivo no es valido. Usa PNG, JPG o WEBP.',
+      );
+    }
+
+    if (file.size > AVATAR_MAX_SIZE_BYTES) {
+      throw new BadRequestException('El avatar supera el tamano maximo de 5 MB');
+    }
+
+    if (!hasValidAvatarSignature(file.buffer, extension)) {
+      throw new BadRequestException(
+        'El archivo no coincide con una imagen PNG, JPG o WEBP valida.',
+      );
+    }
+
     const currentProfile = await this.profilesService.findByUserId(user.userId);
+    const safeExtension = normalizeAvatarExtension(extension);
+    const safeAvatarBaseName = `avatar-${user.userId}-${Date.now()}`;
 
     const storedAvatar = await this.storageService.upload({
       buffer: file.buffer,
-      originalName: file.originalname,
-      mimeType: file.mimetype,
+      originalName: `${safeAvatarBaseName}${safeExtension}`,
+      mimeType: file.mimetype === 'image/jpg' ? 'image/jpeg' : file.mimetype,
       folder: 'avatars',
       resourceType: 'image',
+      targetBaseName: safeAvatarBaseName,
     });
 
     const updatePayload: AvatarProfileUpdate = {

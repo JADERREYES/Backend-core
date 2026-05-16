@@ -268,8 +268,11 @@ function applyAppConfiguration(
   if (storageProvider === 'local' && publicUploadsEnabled) {
     app.useStaticAssets(join(process.cwd(), 'uploads', 'avatars'), {
       prefix: '/uploads/avatars/',
+      index: false,
+      redirect: false,
       setHeaders: (res) => {
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Cache-Control', 'public, max-age=300');
       },
     });
