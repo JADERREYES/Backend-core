@@ -78,4 +78,75 @@ describe('AiService', () => {
       service.containsRiskLanguage('hoy quiero aprender a respirar mejor'),
     ).toBe(false);
   });
+
+  it('classifies emotional violence prompts to guide a safer conversational style', () => {
+    const service = createService() as unknown as {
+      detectEmotionalIntent: (prompt: string) => string;
+    };
+
+    expect(
+      service.detectEmotionalIntent('Mi pareja me controla y me revisa el celular'),
+    ).toBe('emotional_violence');
+  });
+
+  it('prefers asking one question first when context is still shallow', () => {
+    const service = createService() as unknown as {
+      shouldLeadWithQuestion: (
+        prompt: string,
+        history: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
+        crisisMode: boolean,
+      ) => boolean;
+    };
+
+    expect(
+      service.shouldLeadWithQuestion(
+        'Estoy agotado mentalmente',
+        [],
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it('builds a system prompt that enforces brevity and avoids list-like replies', () => {
+    const service = createService() as unknown as {
+      buildSystemPrompt: (args: {
+        rag: {
+          chunks: Array<{
+            documentTitle: string;
+            sourceFileName?: string;
+            chunkIndex: number;
+            totalChunks: number;
+            text: string;
+          }>;
+        };
+        longTermContext: string;
+        crisisMode: boolean;
+        intent: string;
+        shouldLeadWithQuestion: boolean;
+      }) => string;
+    };
+
+    const prompt = service.buildSystemPrompt({
+      rag: {
+        chunks: [
+          {
+            documentTitle: 'Guia de ansiedad',
+            sourceFileName: 'ansiedad.pdf',
+            chunkIndex: 0,
+            totalChunks: 1,
+            text: 'Contenido de referencia breve.',
+          },
+        ],
+      },
+      longTermContext: '',
+      crisisMode: false,
+      intent: 'anxiety',
+      shouldLeadWithQuestion: true,
+    });
+
+    expect(prompt).toContain('Tus respuestas normalmente deben medir entre 40 y 120 palabras.');
+    expect(prompt).toContain('Haz UNA sola pregunta por mensaje');
+    expect(prompt).toContain('Evita enumeraciones, bullets y listas.');
+    expect(prompt).toContain('Usa el RAG solo como orientacion silenciosa');
+  });
 });

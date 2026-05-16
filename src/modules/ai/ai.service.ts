@@ -46,6 +46,17 @@ type MemorySuggestion = {
   confidence?: number;
 };
 
+type EmotionalIntent =
+  | 'anxiety'
+  | 'sadness'
+  | 'exhaustion'
+  | 'loneliness'
+  | 'emotional_violence'
+  | 'self_esteem'
+  | 'academic_stress'
+  | 'crisis'
+  | 'general';
+
 const CRISIS_KEYWORD_REGEX =
   /\b(suicid(?:a(?:r(?:me|se)?)?|io|arme|arse)?|matarme|quitarme la vida|autoles(?:ion|ionarme)?|lesionarme|hacerme dano|hacerm[eé] da[nñ]o|no quiero vivir|quiero morir)\b/i;
 
@@ -139,10 +150,18 @@ export class AiService {
 
       const recentHistory = history.slice(-this.shortTermLimit);
       const crisisMode = this.containsRiskLanguage(prompt);
+      const intent = this.detectEmotionalIntent(prompt);
+      const shouldLeadWithQuestion = this.shouldLeadWithQuestion(
+        prompt,
+        recentHistory,
+        crisisMode,
+      );
       const systemMessage = this.buildSystemPrompt({
         rag,
         longTermContext,
         crisisMode,
+        intent,
+        shouldLeadWithQuestion,
       });
 
       const messages: Array<{
@@ -162,26 +181,26 @@ export class AiService {
       const completion = await this.openai.chat.completions.create({
         model: this.chatModel,
         messages,
-        max_tokens: crisisMode ? 950 : 820,
-        temperature: 0.6,
+        max_tokens: crisisMode ? 300 : 220,
+        temperature: crisisMode ? 0.5 : 0.45,
       });
 
       let responseText =
         completion.choices[0].message.content ||
         'No pude generar una respuesta.';
 
-      if (completion.choices[0].finish_reason === 'length') {
+      if (crisisMode && completion.choices[0].finish_reason === 'length') {
         const continuation = await this.openai.chat.completions.create({
           model: this.chatModel,
-          temperature: 0.45,
-          max_tokens: crisisMode ? 220 : 180,
+          temperature: 0.35,
+          max_tokens: 120,
           messages: [
             ...messages,
             { role: 'assistant', content: responseText },
             {
               role: 'user',
               content:
-                'Continua exactamente desde donde quedaste, sin repetir lo ya dicho, y cierra la idea en un tono humano y concreto.',
+                'Cierra la idea con un ultimo parrafo breve, humano y concreto, sin repetir ni abrir nuevos temas.',
             },
           ],
         });
@@ -330,10 +349,14 @@ export class AiService {
     rag,
     longTermContext,
     crisisMode,
+    intent,
+    shouldLeadWithQuestion,
   }: {
     rag: Awaited<ReturnType<DocumentsRagService['retrieveRelevantContext']>>;
     longTermContext: string;
     crisisMode: boolean;
+    intent: EmotionalIntent;
+    shouldLeadWithQuestion: boolean;
   }) {
     const documentContext = rag.chunks.length
       ? rag.chunks
@@ -345,23 +368,118 @@ export class AiService {
       : 'Sin documentos relevantes recuperados.';
 
     const crisisInstructions = crisisMode
-      ? `El ultimo mensaje sugiere posible crisis o riesgo de autolesion. Responde con tono calmado, directo y humano. Prioriza seguridad inmediata, invita a contactar una persona de confianza o servicios de emergencia/locales, y deja claro que no sustituyes ayuda profesional. No uses tono frio ni burocratico.`
+      ? `El ultimo mensaje sugiere posible crisis o riesgo de autolesion. Responde con tono calmado, directo y humano. Prioriza seguridad inmediata, invita a contactar una persona de confianza o servicios de emergencia/locales, y deja claro que no sustituyes ayuda profesional. No uses tono frio, tecnico ni burocratico.`
       : '';
 
+    const interactionModeInstructions = shouldLeadWithQuestion
+      ? 'En este turno, valida la emocion, acompana con calidez y haz UNA sola pregunta abierta para entender mejor. No des varias soluciones todavia.'
+      : 'En este turno ya hay suficiente contexto. Puedes ofrecer apoyo breve y una sola micro-sugerencia suave, seguida de una sola pregunta corta si ayuda a continuar la conversacion.';
+
     return [
-      'Eres MenteAmiga, un asistente de apoyo emocional para salud emocional.',
-      'Responde con empatia, honestidad y utilidad practica.',
+      'Eres MenteAmiga, un asistente de apoyo emocional conversacional.',
+      'Tu estilo debe sentirse como una conversacion humana por chat, no como un manual, articulo, informe ni terapia formal.',
+      'Responde en espanol con tono calido, cercano, sincero, suave y protector.',
+      'Prioriza acompanar antes que aconsejar. Primero valida, luego pregunta, y solo despues sugiere algo pequeno.',
+      'Tus respuestas normalmente deben medir entre 40 y 120 palabras. En crisis puedes llegar hasta 180, pero sigue siendo breve.',
+      'Escribe parrafos cortos, con aire visual, faciles de leer en movil.',
+      'Haz UNA sola pregunta por mensaje cuando necesites mas contexto.',
+      'Evita enumeraciones, bullets y listas. Solo usalas si el usuario las pide de forma explicita, y aun asi limita a maximo 3 puntos.',
+      'No des charlas largas, no sueltes muchos consejos juntos, no respondas como PDF y no suenes academico, clinico, tecnico ni robotico.',
+      'No diagnostiques. No prometas curas ni resultados. No minimices con frases como "todo estara bien" o "no te preocupes".',
       'Nunca inventes hechos, politicas, diagnosticos, nombres, resultados ni contenido documental.',
       'Si no hay contexto suficiente para responder una parte, dilo claramente.',
       'No sustituyes atencion medica, psiquiatrica ni psicologica profesional.',
-      'Si usas informacion documental, menciona la fuente por titulo o archivo de forma natural.',
+      'Usa el RAG solo como orientacion silenciosa para entender mejor el caso y responder con mas criterio. No copies, no recites ni cites manuales salvo que el usuario lo pida o sea realmente necesario.',
       'No conviertas memoria corta o larga en verdad absoluta: usala como contexto orientativo.',
+      `Intencion emocional detectada: ${intent}.`,
+      interactionModeInstructions,
       crisisInstructions,
       longTermContext ? `Memoria larga util y segura:\n${longTermContext}` : '',
-      `Contexto documental RAG:\n${documentContext}`,
+      `Contexto documental RAG para orientar el tono y detectar senales, no para sonar documental:\n${documentContext}`,
     ]
       .filter(Boolean)
       .join('\n\n');
+  }
+
+  private detectEmotionalIntent(message: string): EmotionalIntent {
+    const text = message.toLowerCase();
+
+    if (this.containsRiskLanguage(message)) return 'crisis';
+    if (
+      /\b(ansiedad|ansioso|ansiosa|nervios|panico|miedo|inquiet[oa]|angustia)\b/i.test(
+        text,
+      )
+    ) {
+      return 'anxiety';
+    }
+    if (
+      /\b(triste|tristeza|llorar|vacio|vac[íi]o|desanimad[oa]|decaid[oa])\b/i.test(
+        text,
+      )
+    ) {
+      return 'sadness';
+    }
+    if (
+      /\b(agotad[oa]|cansad[oa]|quemad[oa]|burnout|sin energia|sin ganas)\b/i.test(
+        text,
+      )
+    ) {
+      return 'exhaustion';
+    }
+    if (/\b(sol[oa]|solo|sola|aislad[oa]|nadie me escucha|sin nadie)\b/i.test(text)) {
+      return 'loneliness';
+    }
+    if (
+      /\b(controla|manipula|gaslighting|humilla|insulta|cela|me revisa|me a[íi]sla|violencia)\b/i.test(
+        text,
+      )
+    ) {
+      return 'emotional_violence';
+    }
+    if (
+      /\b(no sirvo|insuficiente|inutil|no valgo|autoestima|me odio|me comparo)\b/i.test(
+        text,
+      )
+    ) {
+      return 'self_esteem';
+    }
+    if (
+      /\b(universidad|examen|tarea|clase|semestre|academi|estudi|profesor)\b/i.test(
+        text,
+      )
+    ) {
+      return 'academic_stress';
+    }
+
+    return 'general';
+  }
+
+  private shouldLeadWithQuestion(
+    prompt: string,
+    history: ConversationHistoryItem[],
+    crisisMode: boolean,
+  ) {
+    if (crisisMode) {
+      return false;
+    }
+
+    const cleanPrompt = prompt.trim();
+    const hasLongerContext = cleanPrompt.length >= 160;
+    const hasRecentConversation = history.length >= 4;
+    const asksForConcretePlan =
+      /\b(que puedo hacer|que hago|dame pasos|hazme un plan|como salgo|ayudame paso a paso)\b/i.test(
+        cleanPrompt,
+      );
+
+    if (!hasLongerContext && !hasRecentConversation) {
+      return true;
+    }
+
+    if (!hasRecentConversation && !asksForConcretePlan) {
+      return true;
+    }
+
+    return false;
   }
 
   private async buildLongTermContext(userId?: string) {
