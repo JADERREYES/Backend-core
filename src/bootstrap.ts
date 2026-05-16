@@ -133,7 +133,6 @@ function applyAppConfiguration(
       'Permissions-Policy',
       'camera=(), microphone=(), geolocation=()',
     );
-    res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
 
     if (isProduction) {
       res.setHeader(
@@ -269,6 +268,10 @@ function applyAppConfiguration(
   if (storageProvider === 'local' && publicUploadsEnabled) {
     app.useStaticAssets(join(process.cwd(), 'uploads', 'avatars'), {
       prefix: '/uploads/avatars/',
+      setHeaders: (res) => {
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+      },
     });
   }
 }

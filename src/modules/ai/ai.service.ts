@@ -56,6 +56,7 @@ export class AiService {
   private readonly chatModel: string;
   private readonly shortTermLimit: number;
   private readonly ragTopK: number;
+  private readonly chatTimeoutMs: number;
 
   constructor(
     private readonly configService: ConfigService,
@@ -68,10 +69,16 @@ export class AiService {
   ) {
     const openAiApiKey = this.configService.get<string>('OPENAI_API_KEY');
     if (openAiApiKey) {
+      this.chatTimeoutMs = Math.max(
+        Number(this.configService.get<string>('OPENAI_TIMEOUT_MS') || 40000),
+        25000,
+      );
       this.openai = new OpenAI({
         apiKey: openAiApiKey,
-        timeout: 25000,
+        timeout: this.chatTimeoutMs,
       });
+    } else {
+      this.chatTimeoutMs = 40000;
     }
 
     this.chatModel =
@@ -155,14 +162,42 @@ export class AiService {
       const completion = await this.openai.chat.completions.create({
         model: this.chatModel,
         messages,
-        max_tokens: crisisMode ? 260 : 220,
+        max_tokens: crisisMode ? 950 : 820,
         temperature: 0.6,
       });
 
+      let responseText =
+        completion.choices[0].message.content ||
+        'No pude generar una respuesta.';
+
+      if (completion.choices[0].finish_reason === 'length') {
+        const continuation = await this.openai.chat.completions.create({
+          model: this.chatModel,
+          temperature: 0.45,
+          max_tokens: crisisMode ? 220 : 180,
+          messages: [
+            ...messages,
+            { role: 'assistant', content: responseText },
+            {
+              role: 'user',
+              content:
+                'Continua exactamente desde donde quedaste, sin repetir lo ya dicho, y cierra la idea en un tono humano y concreto.',
+            },
+          ],
+        });
+        const continuationText =
+          continuation.choices[0].message.content?.trim() || '';
+        if (continuationText) {
+          responseText = `${responseText.trimEnd()}\n\n${continuationText}`;
+        }
+      }
+
+      this.logger.debug(
+        `AI response generated promptLength=${prompt.trim().length} responseLength=${responseText.length} historyItems=${recentHistory.length} retrievalMode=${rag.retrievalMode} sources=${rag.chunks.length} timeoutMs=${this.chatTimeoutMs}`,
+      );
+
       return {
-        text:
-          completion.choices[0].message.content ||
-          'No pude generar una respuesta.',
+        text: responseText,
         contextUsed: rag.contextUsed,
         retrievalMode: rag.retrievalMode,
         sources: rag.chunks.map((chunk) => ({
@@ -260,6 +295,7 @@ export class AiService {
       metadata: {
         contextUsed: aiResult.contextUsed,
         retrievalMode: aiResult.retrievalMode,
+        contentLength: aiResult.text.length,
         sources: aiResult.sources.map((source) => ({
           documentId: source.documentId,
           documentTitle: source.documentTitle,
@@ -273,6 +309,10 @@ export class AiService {
     await this.chatsService.incrementMessageCount(finalChatId);
 
     void this.refreshLongTermMemory(userId, cleanMessage, aiResult.text);
+
+    this.logger.debug(
+      `AI conversation stored userId=${userId} chatId=${finalChatId} userLength=${cleanMessage.length} assistantLength=${aiResult.text.length} savedContextUsed=${aiResult.contextUsed} retrievalMode=${aiResult.retrievalMode}`,
+    );
 
     return {
       chat: this.serializeChat(chatRecord),

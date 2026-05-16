@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Post,
   Put,
@@ -116,6 +117,8 @@ export class ProfilesController {
       throw new BadRequestException('No se recibio ningun avatar');
     }
 
+    const currentProfile = await this.profilesService.findByUserId(user.userId);
+
     const storedAvatar = await this.storageService.upload({
       buffer: file.buffer,
       originalName: file.originalname,
@@ -133,6 +136,40 @@ export class ProfilesController {
       avatarSize: storedAvatar.size,
     };
 
-    return this.profilesService.update(user.userId, updatePayload);
+    const updatedProfile = await this.profilesService.update(
+      user.userId,
+      updatePayload,
+    );
+
+    if (
+      currentProfile?.avatarStorageKey &&
+      currentProfile.avatarStorageKey !== storedAvatar.key
+    ) {
+      await this.storageService
+        .delete(currentProfile.avatarStorageKey)
+        .catch(() => undefined);
+    }
+
+    return updatedProfile;
+  }
+
+  @Delete('me/avatar')
+  async deleteAvatar(@CurrentUser() user: CurrentUserPayload) {
+    const currentProfile = await this.profilesService.findByUserId(user.userId);
+
+    if (currentProfile?.avatarStorageKey) {
+      await this.storageService
+        .delete(currentProfile.avatarStorageKey)
+        .catch(() => undefined);
+    }
+
+    return this.profilesService.update(user.userId, {
+      avatarUrl: '',
+      avatarStorageProvider: '',
+      avatarStorageKey: '',
+      avatarFileName: '',
+      avatarMimeType: '',
+      avatarSize: 0,
+    } as AvatarProfileUpdate);
   }
 }
